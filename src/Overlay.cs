@@ -16,7 +16,8 @@ namespace CursorMotionBlur
     /// </summary>
     sealed class Overlay : Form
     {
-        const int MAX_COPIES = 30;
+        const int MAX_COPIES = 100;       // dense, faint copies read as a smooth blur rather than separate ghosts
+        const double COVER_PX = 10;       // ~how many px of travel one cursor copy "covers" (used to keep the total opacity independent of copy density)
         const int HOLD_MS = 60;           // how long the cursor must stay slow before it comes back
         const int HOTKEY_ID = 1;
 
@@ -60,8 +61,8 @@ namespace CursorMotionBlur
         // static system cursors blanked while the mouse is fast (animated wait/appstarting are left alone)
         static readonly uint[] BLANK_IDS = { 32512, 32513, 32515, 32516, 32642, 32643, 32644, 32645, 32646, 32648, 32649, 32651, 32671, 32672 };
 
-        // lv[i] = the sprite pre-faded to i% opacity, built on first use, so drawing a copy is a plain blit
-        class Sprite { public Bitmap bmp; public int hx, hy; public Bitmap[] lv = new Bitmap[101]; }
+        // lv[i] = the sprite pre-faded to i/255 opacity, built on first use, so drawing a copy is a plain blit
+        class Sprite { public Bitmap bmp; public int hx, hy; public Bitmap[] lv = new Bitmap[256]; }
         struct Sample { public int x, y; public long t; }
 
         /// <summary>Raised when the global toggle hotkey (Ctrl+Alt+B) is pressed.</summary>
@@ -88,7 +89,7 @@ namespace CursorMotionBlur
         int canvasW, canvasH;
         readonly Dictionary<IntPtr, Sprite> sprites = new Dictionary<IntPtr, Sprite>();
         readonly Dictionary<long, Sprite> scaled = new Dictionary<long, Sprite>();
-        readonly ImageAttributes[] attrs = new ImageAttributes[101];
+        readonly ImageAttributes[] attrs = new ImageAttributes[256];
         bool shown;
 
         readonly Stopwatch sw = Stopwatch.StartNew();
@@ -116,9 +117,9 @@ namespace CursorMotionBlur
             Location = new Point(-32000, -32000);
             Size = new Size(1, 1);
 
-            for (int i = 0; i <= 100; i++)
+            for (int i = 0; i <= 255; i++)
             {
-                var m = new ColorMatrix(); m.Matrix33 = i / 100f;
+                var m = new ColorMatrix(); m.Matrix33 = i / 255f;
                 var a = new ImageAttributes(); a.SetColorMatrix(m); attrs[i] = a;
             }
         }
@@ -363,7 +364,9 @@ namespace CursorMotionBlur
             double total = 0;
             for (int i = 1; i < pts.Length; i++)
                 total += Math.Sqrt(Math.Pow(pts[i].x - pts[i - 1].x, 2) + Math.Pow(pts[i].y - pts[i - 1].y, 2));
-            double step = Math.Max(3.0, total / MAX_COPIES);
+            double step = Math.Max(1.0, total / MAX_COPIES);
+            double cover = COVER_PX * size / 32.0;
+            double peak = strength / 100.0;
 
             EnsureCanvas(w, h);
             var g = canvasG;
@@ -385,9 +388,10 @@ namespace CursorMotionBlur
                     double life = 1.0 - (now - t) / trailMs;
                     if (life <= 0) continue;
                     life *= life; // steeper fade
-                    int ai = (int)Math.Round(life * strength);
+                    // copies overlap by about cover/step, so each one gets that share of the opacity the user asked for
+                    int ai = (int)Math.Round(Math.Min(1.0, peak * life * step / cover) * 255);
                     if (ai <= 0) continue;
-                    g.DrawImageUnscaled(Level(sp, Math.Min(ai, 100)), (int)Math.Round(x) - sp.hx - minX, (int)Math.Round(y) - sp.hy - minY);
+                    g.DrawImageUnscaled(Level(sp, ai), (int)Math.Round(x) - sp.hx - minX, (int)Math.Round(y) - sp.hy - minY);
                 }
             }
 
@@ -404,14 +408,14 @@ namespace CursorMotionBlur
             }
         }
 
-        Bitmap Level(Sprite sp, int pct)
+        Bitmap Level(Sprite sp, int a)
         {
-            var b = sp.lv[pct];
+            var b = sp.lv[a];
             if (b != null) return b;
             b = new Bitmap(sp.bmp.Width, sp.bmp.Height, PixelFormat.Format32bppPArgb);
             using (var g = Graphics.FromImage(b))
-                g.DrawImage(sp.bmp, new Rectangle(0, 0, b.Width, b.Height), 0, 0, b.Width, b.Height, GraphicsUnit.Pixel, attrs[pct]);
-            sp.lv[pct] = b;
+                g.DrawImage(sp.bmp, new Rectangle(0, 0, b.Width, b.Height), 0, 0, b.Width, b.Height, GraphicsUnit.Pixel, attrs[a]);
+            sp.lv[a] = b;
             return b;
         }
 

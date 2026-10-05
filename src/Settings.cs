@@ -10,7 +10,7 @@ namespace CursorMotionBlur
     /// <summary>User settings, stored as a small key=value file in %APPDATA%\CursorMotionBlur.</summary>
     static class Settings
     {
-        public const int DefaultStrength = 18, DefaultTrailMs = 30, DefaultHideSpeed = 3500;
+        public const int DefaultStrength = 45, DefaultTrailMs = 30, DefaultHideSpeed = 3500;
 
         // read from the overlay's worker threads, so keep them simple fields
         public static volatile bool Enabled = true;
