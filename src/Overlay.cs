@@ -105,6 +105,8 @@ namespace CursorMotionBlur
         readonly Dictionary<long, Sprite> scaled = new Dictionary<long, Sprite>();
         readonly ImageAttributes[] attrs = new ImageAttributes[256];
         bool shown;
+        bool wasBlank;
+        Sprite lastSprite;
 
         readonly Stopwatch sw = Stopwatch.StartNew();
         IntPtr hwnd;
@@ -149,6 +151,9 @@ namespace CursorMotionBlur
         {
             base.OnShown(e);
             ShowWindow(hwnd, 0);
+            // grab the current cursor's picture now, before any fast movement can hide it
+            var ci = new CURSORINFO { cbSize = Marshal.SizeOf(typeof(CURSORINFO)) };
+            if (GetCursorInfo(ref ci) && (ci.flags & 1) != 0) { lastSprite = GetSprite(ci.hCursor); }
             new Thread(SampleLoop) { IsBackground = true, Priority = ThreadPriority.AboveNormal }.Start();
             new Thread(RenderLoop) { IsBackground = true, Priority = ThreadPriority.AboveNormal }.Start();
             new Thread(HideLoop) { IsBackground = true }.Start();
@@ -251,6 +256,14 @@ namespace CursorMotionBlur
             }
         }
 
+        // Set the environment variable CMB_DEBUG=1 to get %TEMP%\CursorMotionBlur.log (errors that are otherwise swallowed).
+        static readonly bool debug = Environment.GetEnvironmentVariable("CMB_DEBUG") == "1";
+        static void Log(string msg)
+        {
+            if (!debug) return;
+            try { System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "CursorMotionBlur.log"), DateTime.Now.ToString("HH:mm:ss.fff ") + msg + "\r\n"); } catch { }
+        }
+
         // Physical pixel density of a monitor, from the size Windows reports for it (EDID). If that looks wrong
         // (some monitors/drivers report nothing), fall back to its DPI setting.
         static double PixelsPerCm(IntPtr mon, uint dpi)
@@ -308,7 +321,7 @@ namespace CursorMotionBlur
             {
                 bool fresh = moved.WaitOne(shown ? 4 : 100); // only tick on a timer while a trail is still fading
                 if (!fresh && !shown) continue;
-                try { Render(); } catch { }
+                try { Render(); } catch (Exception ex) { Log("Render: " + ex); }
             }
         }
 
@@ -347,14 +360,27 @@ namespace CursorMotionBlur
                     var src = ic.ToBitmap();
                     var b = new Bitmap(src.Width, src.Height, PixelFormat.Format32bppPArgb);
                     using (var g = Graphics.FromImage(b)) g.DrawImage(src, 0, 0);
-                    sp = new Sprite { bmp = b, hx = ii.xHot, hy = ii.yHot };
+                    if (IsBlank(b)) b = null; // never keep an empty picture (the cursor may be swapped for the invisible one)
+                    if (b != null) sp = new Sprite { bmp = b, hx = ii.xHot, hy = ii.yHot };
+                    if (sp != null) Log("sprite for handle " + h + ": " + b.Width + "x" + b.Height + " hotspot " + ii.xHot + "," + ii.yHot);
                 }
                 if (ii.hbmMask != IntPtr.Zero) DeleteObject(ii.hbmMask);
                 if (ii.hbmColor != IntPtr.Zero) DeleteObject(ii.hbmColor);
             }
-            catch { }
-            sprites[h] = sp;
+            catch (Exception ex) { Log("GetSprite: " + ex); }
+            // Only cache a picture taken while the real cursor is showing. Blanking replaces the cursor's content
+            // under the same handle, so a picture grabbed during/after the swap could be the blank one.
+            if (sp != null && blankActive) sp = null;
+            if (sp != null) sprites[h] = sp;
             return sp;
+        }
+
+        static bool IsBlank(Bitmap b)
+        {
+            for (int y = 0; y < b.Height; y++)
+                for (int x = 0; x < b.Width; x++)
+                    if (b.GetPixel(x, y).A != 0) return false;
+            return true;
         }
 
         void HideOverlay()
@@ -374,8 +400,15 @@ namespace CursorMotionBlur
                 pts = hist.ToArray();
             }
             if (!visible || pts.Length < 2) { HideOverlay(); return; }
-            var sp = GetScaledSprite(handle, size);
-            if (sp == null) { HideOverlay(); return; }
+            // While the real cursor is hidden, keep drawing with the picture taken before it was; after it comes back,
+            // drop the cache so everything is rebuilt from the restored cursors.
+            bool blank = blankActive;
+            if (wasBlank && !blank) { sprites.Clear(); scaled.Clear(); }
+            wasBlank = blank;
+            Sprite sp;
+            if (blank) sp = lastSprite;
+            else { sp = GetScaledSprite(handle, size); if (sp != null) lastSprite = sp; else sp = lastSprite; }
+            if (sp == null) { Log("no sprite for cursor handle " + handle); HideOverlay(); return; }
 
             long now = sw.ElapsedMilliseconds;
             var last = pts[pts.Length - 1];
