@@ -21,7 +21,7 @@ A tiny Windows tray app that adds a **live motion blur to your mouse cursor**, s
 | --- | --- |
 | Blur strength | Peak opacity of the blur (1-100%) |
 | Trail length | How far back in time the blur reaches (10-150 ms) |
-| Hide the real cursor when moving very fast | Swaps the system cursors for an invisible one above the chosen speed, then restores them |
+| Hide the real cursor when moving very fast | Swaps the system cursors for an invisible one above the chosen speed, then restores them. The speed is in cm/s on screen (using each monitor's reported physical size), so it feels the same on small and big monitors |
 | Launch when Windows starts | Adds or removes a per-user startup entry |
 
 Settings are stored in `%APPDATA%\CursorMotionBlur\settings.ini`.
@@ -47,4 +47,5 @@ A layered, click-through, always-on-top window draws fading copies of the curren
 ## License
 
 Public domain ([Unlicense](LICENSE)). Anyone can use, copy, modify or sell it, no strings attached.
+
 

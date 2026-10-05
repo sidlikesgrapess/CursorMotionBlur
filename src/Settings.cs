@@ -10,14 +10,14 @@ namespace CursorMotionBlur
     /// <summary>User settings, stored as a small key=value file in %APPDATA%\CursorMotionBlur.</summary>
     static class Settings
     {
-        public const int DefaultStrength = 45, DefaultTrailMs = 30, DefaultHideSpeed = 3500;
+        public const int DefaultStrength = 45, DefaultTrailMs = 30, DefaultHideSpeedCm = 100;
 
         // read from the overlay's worker threads, so keep them simple fields
         public static volatile bool Enabled = true;
         public static volatile int Strength = DefaultStrength;        // 1-100, peak opacity of the blur in %
         public static volatile int TrailMs = DefaultTrailMs;          // how far back in time the blur reaches
         public static volatile bool HideWhenFast = true;              // hide the real cursor while moving very fast
-        public static volatile int HideSpeed = DefaultHideSpeed;      // px/s above which the real cursor is hidden
+        public static volatile int HideSpeedCm = DefaultHideSpeedCm;  // on-screen cm/s above which the real cursor is hidden
 
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         const string RunValue = "CursorMotionBlur";
@@ -52,7 +52,7 @@ namespace CursorMotionBlur
             Strength = DefaultStrength;
             TrailMs = DefaultTrailMs;
             HideWhenFast = true;
-            HideSpeed = DefaultHideSpeed;
+            HideSpeedCm = DefaultHideSpeedCm;
             Save();
         }
 
@@ -71,7 +71,7 @@ namespace CursorMotionBlur
                 Strength = Clamp(GetInt(kv, "Strength", DefaultStrength), 1, 100);
                 TrailMs = Clamp(GetInt(kv, "TrailMs", DefaultTrailMs), 10, 150);
                 HideWhenFast = GetBool(kv, "HideWhenFast", true);
-                HideSpeed = Clamp(GetInt(kv, "HideSpeed", DefaultHideSpeed), 1000, 8000);
+                HideSpeedCm = Clamp(GetInt(kv, "HideSpeedCm", DefaultHideSpeedCm), 20, 400);
             }
             catch { /* corrupt file: keep defaults */ }
         }
@@ -87,7 +87,7 @@ namespace CursorMotionBlur
                     "Strength=" + Strength,
                     "TrailMs=" + TrailMs,
                     "HideWhenFast=" + HideWhenFast,
-                    "HideSpeed=" + HideSpeed
+                    "HideSpeedCm=" + HideSpeedCm
                 });
             }
             catch { }

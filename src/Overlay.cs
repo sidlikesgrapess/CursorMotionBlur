@@ -41,6 +41,19 @@ namespace CursorMotionBlur
         [DllImport("user32.dll")] static extern bool SystemParametersInfo(uint action, uint param, IntPtr pv, uint winIni);
         [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr h, int id, uint mods, uint vk);
         [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr h, int id);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool GetMonitorInfo(IntPtr mon, ref MONITORINFOEX mi);
+        [DllImport("gdi32.dll", CharSet = CharSet.Unicode)] static extern IntPtr CreateDC(string driver, string device, string port, IntPtr devMode);
+        [DllImport("gdi32.dll")] static extern int GetDeviceCaps(IntPtr dc, int index);
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct MONITORINFOEX
+        {
+            public int cbSize;
+            public int l1, t1, r1, b1, l2, t2, r2, b2;
+            public int flags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice;
+        }
+
         [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr mon, int type, out uint dx, out uint dy);
         [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
         [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr o);
@@ -74,6 +87,7 @@ namespace CursorMotionBlur
         IntPtr curHandle;
         bool curVisible;
         int monCursor = 32;
+        double monPxPerCm = 38;
         bool hideWanted;
         long lastFast;
         volatile bool blankActive; // system cursors currently replaced by a blank one
@@ -189,6 +203,7 @@ namespace CursorMotionBlur
                             uint dx = 96, dy = 96;
                             try { GetDpiForMonitor(mon, 0, out dx, out dy); } catch { }
                             monCursor = GetSystemMetricsForDpi(13, (int)dx);
+                            monPxPerCm = PixelsPerCm(mon, dx);
                         }
 
                         long now = sw.ElapsedMilliseconds;
@@ -213,7 +228,7 @@ namespace CursorMotionBlur
                                 path += Math.Sqrt(ddx * ddx + ddy * ddy);
                             }
                             double speed = path * 1000.0 / dt;
-                            double hide = Settings.HideSpeed;
+                            double hide = Settings.HideSpeedCm * monPxPerCm; // px/s on the monitor the cursor is on
                             if (speed > hide) { hideWanted = true; lastFast = now; }
                             else if (hideWanted && speed < hide * 0.5 && now - lastFast > HOLD_MS) hideWanted = false;
                         }
@@ -234,6 +249,25 @@ namespace CursorMotionBlur
                     Thread.Sleep(timerHigh ? 4 : 10);
                 }
             }
+        }
+
+        // Physical pixel density of a monitor, from the size Windows reports for it (EDID). If that looks wrong
+        // (some monitors/drivers report nothing), fall back to its DPI setting.
+        static double PixelsPerCm(IntPtr mon, uint dpi)
+        {
+            double fallback = Math.Max(20.0, dpi / 2.54);
+            try
+            {
+                var mi = new MONITORINFOEX { cbSize = Marshal.SizeOf(typeof(MONITORINFOEX)) };
+                if (!GetMonitorInfo(mon, ref mi)) return fallback;
+                IntPtr dc = CreateDC("DISPLAY", mi.szDevice, null, IntPtr.Zero);
+                if (dc == IntPtr.Zero) return fallback;
+                int mm = GetDeviceCaps(dc, 4), px = GetDeviceCaps(dc, 8); // HORZSIZE (mm), HORZRES (px)
+                DeleteDC(dc);
+                if (mm < 150 || mm > 2500 || px < 320) return fallback;
+                return px / (mm / 10.0);
+            }
+            catch { return fallback; }
         }
 
         // swaps the system cursors for a blank one / restores them; kept off the sampler thread because restoring is slow

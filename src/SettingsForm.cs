@@ -43,7 +43,7 @@ namespace CursorMotionBlur
             barStrength = AddSlider(table, 1, 100, 10, out lblStrength);
             barTrail = AddSlider(table, 10, 150, 10, out lblTrail);
             chkHide = AddCheck(table, "Hide the real cursor when moving very fast");
-            barSpeed = AddSlider(table, 1000, 8000, 500, out lblSpeed);
+            barSpeed = AddSlider(table, 20, 300, 20, out lblSpeed);
             chkStartup = AddCheck(table, "Launch CursorMotionBlur when Windows starts");
 
             var buttons = new FlowLayoutPanel
@@ -68,7 +68,7 @@ namespace CursorMotionBlur
             chkStartup.CheckedChanged += delegate { if (!loading) Settings.StartWithWindows = chkStartup.Checked; };
             barStrength.ValueChanged += delegate { if (!loading) { Settings.Strength = barStrength.Value; Settings.Save(); } UpdateLabels(); };
             barTrail.ValueChanged += delegate { if (!loading) { Settings.TrailMs = barTrail.Value; Settings.Save(); } UpdateLabels(); };
-            barSpeed.ValueChanged += delegate { if (!loading) { Settings.HideSpeed = barSpeed.Value; Settings.Save(); } UpdateLabels(); };
+            barSpeed.ValueChanged += delegate { if (!loading) { Settings.HideSpeedCm = barSpeed.Value; Settings.Save(); } UpdateLabels(); };
 
             LoadValues();
         }
@@ -81,7 +81,7 @@ namespace CursorMotionBlur
             chkStartup.Checked = Settings.StartWithWindows;
             barStrength.Value = Settings.Strength;
             barTrail.Value = Settings.TrailMs;
-            barSpeed.Value = Math.Max(barSpeed.Minimum, Math.Min(barSpeed.Maximum, Settings.HideSpeed));
+            barSpeed.Value = Math.Max(barSpeed.Minimum, Math.Min(barSpeed.Maximum, Settings.HideSpeedCm));
             barSpeed.Enabled = chkHide.Checked;
             loading = false;
             UpdateLabels();
@@ -91,7 +91,7 @@ namespace CursorMotionBlur
         {
             lblStrength.Text = "Blur strength: " + barStrength.Value + "%";
             lblTrail.Text = "Trail length: " + barTrail.Value + " ms";
-            lblSpeed.Text = "Hide above speed: " + barSpeed.Value + " px/s";
+            lblSpeed.Text = "Hide above speed: " + barSpeed.Value + " cm/s on screen";
         }
 
         static CheckBox AddCheck(TableLayoutPanel table, string text)
