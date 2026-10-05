@@ -107,6 +107,7 @@ namespace CursorMotionBlur
         bool shown;
         bool wasBlank;
         Sprite lastSprite;
+        IntPtr lastGoodHandle;   // cursor handle that lastSprite was built from
 
         readonly Stopwatch sw = Stopwatch.StartNew();
         IntPtr hwnd;
@@ -153,7 +154,7 @@ namespace CursorMotionBlur
             ShowWindow(hwnd, 0);
             // grab the current cursor's picture now, before any fast movement can hide it
             var ci = new CURSORINFO { cbSize = Marshal.SizeOf(typeof(CURSORINFO)) };
-            if (GetCursorInfo(ref ci) && (ci.flags & 1) != 0) { lastSprite = GetSprite(ci.hCursor); }
+            if (GetCursorInfo(ref ci) && (ci.flags & 1) != 0) { lastSprite = GetSprite(ci.hCursor); lastGoodHandle = ci.hCursor; }
             new Thread(SampleLoop) { IsBackground = true, Priority = ThreadPriority.AboveNormal }.Start();
             new Thread(RenderLoop) { IsBackground = true, Priority = ThreadPriority.AboveNormal }.Start();
             new Thread(HideLoop) { IsBackground = true }.Start();
@@ -344,6 +345,7 @@ namespace CursorMotionBlur
             }
             sp = new Sprite { bmp = b, hx = (int)Math.Round(bs.hx * f), hy = (int)Math.Round(bs.hy * f) };
             scaled[key] = sp;
+            Log("scaled sprite for handle " + h + " to " + nw + "x" + nh + (blankActive ? " (cursor hidden)" : ""));
             return sp;
         }
 
@@ -406,8 +408,17 @@ namespace CursorMotionBlur
             if (wasBlank && !blank) { sprites.Clear(); scaled.Clear(); }
             wasBlank = blank;
             Sprite sp;
-            if (blank) sp = lastSprite;
-            else { sp = GetScaledSprite(handle, size); if (sp != null) lastSprite = sp; else sp = lastSprite; }
+            if (blank)
+            {
+                // still scale the last real picture for the monitor the cursor is on now (the cursor may have changed monitors)
+                sp = lastGoodHandle != IntPtr.Zero ? GetScaledSprite(lastGoodHandle, size) : null;
+                if (sp == null) sp = lastSprite;
+            }
+            else
+            {
+                sp = GetScaledSprite(handle, size);
+                if (sp != null) { lastSprite = sp; lastGoodHandle = handle; } else sp = lastSprite;
+            }
             if (sp == null) { Log("no sprite for cursor handle " + handle); HideOverlay(); return; }
 
             long now = sw.ElapsedMilliseconds;
