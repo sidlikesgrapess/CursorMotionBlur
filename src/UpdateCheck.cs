@@ -33,15 +33,15 @@ namespace CursorMotionBlur
                     Version latest, current;
                     if (!tag.Success || !Version.TryParse(tag.Groups[1].Value, out latest) || !Version.TryParse(AppInfo.Version, out current))
                     {
-                        done("Couldn't read the latest version", null);
+                        done("Couldn't read version", null);
                         return;
                     }
-                    if (latest > current) done("Version " + latest + " is available", "https://github.com/" + Repo + "/releases/tag/v" + latest);
-                    else done("You're up to date (v" + AppInfo.Version + ")", null);
+                    if (latest > current) done("v" + latest + " is available", "https://github.com/" + Repo + "/releases/tag/v" + latest);
+                    else done("Up to date (v" + AppInfo.Version + ")", null);
                 }
                 catch (Exception)
                 {
-                    done("Couldn't check (no connection?)", null);
+                    done("Can't check (offline?)", null);
                 }
             });
         }

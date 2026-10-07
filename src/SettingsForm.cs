@@ -129,8 +129,9 @@ namespace CursorMotionBlur
 
             // One table, never nested. Every row spans both columns except the two buttons on the last row.
             table = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.None, Location = new Point(Padding.Left, Padding.Top) };
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            // Two fixed, equal columns (together as wide as a slider), so changing text in one row can never move the other rows.
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, P(150)));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, P(150)));
             Controls.Add(table);
 
             chkEnabled = AddCheck("Enable motion blur  (Ctrl+Alt+B)");
@@ -141,7 +142,7 @@ namespace CursorMotionBlur
             chkStartup = AddCheck("Launch CursorMotionBlur when Windows starts");
 
             // version + manual update check (one row: status on the left, button on the right)
-            lblUpdate = new Label { AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, P(12), P(12), 0) };
+            lblUpdate = new Label { AutoSize = false, AutoEllipsis = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, P(12), P(6), 0), Size = new Size(P(150) - P(6), Font.Height + P(4)), TextAlign = ContentAlignment.MiddleLeft };
             btnUpdate = new Button { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Right, Margin = new Padding(0, P(12), 0, 0), Padding = new Padding(P(6), P(2), P(6), P(2)) };
             btnUpdate.Click += delegate
             {
@@ -152,7 +153,7 @@ namespace CursorMotionBlur
             table.Controls.Add(btnUpdate);
             ShowUpdateState();
 
-            var reset = new Button { Text = "Reset to defaults", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Right, Margin = new Padding(0, P(12), P(6), 0), Padding = new Padding(P(6), P(2), P(6), P(2)) };
+            var reset = new Button { Text = "Reset to defaults", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Left, Margin = new Padding(0, P(12), 0, 0), Padding = new Padding(P(6), P(2), P(6), P(2)) };
             var close = new Button { Text = "Close", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Right, Margin = new Padding(0, P(12), 0, 0), Padding = new Padding(P(10), P(2), P(10), P(2)) };
             reset.Click += delegate { Settings.ResetDefaults(); LoadValues(); };
             close.Click += delegate { Close(); };
