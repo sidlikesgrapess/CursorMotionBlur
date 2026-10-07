@@ -44,8 +44,7 @@ namespace CursorMotionBlur
         public SettingsForm()
         {
             Text = "CursorMotionBlur";
-            FormBorderStyle = FormBorderStyle.Sizable;     // resizable by dragging, as a safety net if anything is ever too small
-            AutoScroll = true;                             // ...and it scrolls instead of clipping when it is made smaller than its content
+            FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = true;
