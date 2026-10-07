@@ -345,12 +345,16 @@ namespace CursorMotionBlur
         {
             while (running)
             {
-                bool fresh = moved.WaitOne(shown ? 4 : 250); // only tick on a timer while a trail is still fading
+                // Draw on every new mouse position. The timer (one 120 Hz frame) only carries the fade after the mouse stops: Windows
+                // shows one update per screen refresh, so drawing more often than that is wasted work.
+                bool fresh = moved.WaitOne(shown ? 8 : 250);
+                long sinceDraw = sw.ElapsedMilliseconds - lastDraw;
                 if (!fresh && !shown)
                 {
-                    if (canvas != null && sw.ElapsedMilliseconds - lastDraw > 1500) ReleaseCanvas();   // give the memory back while idle
+                    if (canvas != null && sinceDraw > 1500) ReleaseCanvas();   // give the memory back while idle
                     continue;
                 }
+                if (fresh ? sinceDraw < 3 : sinceDraw < 6) continue;   // just drawn (a very fast mouse reports faster than anyone can see)
                 try { Render(); } catch (Exception ex) { Log("Render: " + ex); }
             }
         }
