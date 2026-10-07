@@ -39,11 +39,14 @@ namespace CursorMotionBlur
         TableLayoutPanel table;
         CheckBox chkEnabled, chkHide, chkStartup;
         TrackBar barStrength, barTrail, barSpeed;
-        Label lblStrength, lblTrail, lblSpeed;
+        Label lblStrength, lblTrail, lblSpeed, lblUpdate;
+        Button btnUpdate;
+        string updateMsg, updateUrl;   // result of the last update check
+        bool checking;
 
         public SettingsForm()
         {
-            Text = "CursorMotionBlur";
+            Text = AppInfo.Title;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -137,6 +140,18 @@ namespace CursorMotionBlur
             barSpeed = AddSlider(20, 300, 20, out lblSpeed);
             chkStartup = AddCheck("Launch CursorMotionBlur when Windows starts");
 
+            // version + manual update check (one row: status on the left, button on the right)
+            lblUpdate = new Label { AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, P(12), P(12), 0) };
+            btnUpdate = new Button { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Right, Margin = new Padding(0, P(12), 0, 0), Padding = new Padding(P(6), P(2), P(6), P(2)) };
+            btnUpdate.Click += delegate
+            {
+                if (updateUrl != null) { try { System.Diagnostics.Process.Start(updateUrl); } catch { } }
+                else CheckForUpdates();
+            };
+            table.Controls.Add(lblUpdate);
+            table.Controls.Add(btnUpdate);
+            ShowUpdateState();
+
             var reset = new Button { Text = "Reset to defaults", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Right, Margin = new Padding(0, P(12), P(6), 0), Padding = new Padding(P(6), P(2), P(6), P(2)) };
             var close = new Button { Text = "Close", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Right, Margin = new Padding(0, P(12), 0, 0), Padding = new Padding(P(10), P(2), P(10), P(2)) };
             reset.Click += delegate { Settings.ResetDefaults(); LoadValues(); };
@@ -190,6 +205,33 @@ namespace CursorMotionBlur
             barSpeed.Enabled = chkHide.Checked;
             loading = false;
             UpdateLabels();
+        }
+
+        void CheckForUpdates()
+        {
+            checking = true;
+            updateMsg = "Checking...";
+            ShowUpdateState();
+            UpdateCheck.Run(delegate(string message, string url)
+            {
+                try
+                {
+                    BeginInvoke(new Action(delegate
+                    {
+                        checking = false; updateMsg = message; updateUrl = url;
+                        ShowUpdateState();
+                    }));
+                }
+                catch { }   // the window was closed meanwhile
+            });
+        }
+
+        // what the update row shows; kept in fields so it survives the window being rebuilt for another monitor's DPI
+        void ShowUpdateState()
+        {
+            lblUpdate.Text = updateMsg ?? ("Version " + AppInfo.Version);
+            btnUpdate.Text = updateUrl != null ? "Download" : "Check for updates";
+            btnUpdate.Enabled = !checking;
         }
 
         void UpdateLabels()

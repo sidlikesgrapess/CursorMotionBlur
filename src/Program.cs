@@ -42,7 +42,7 @@ namespace CursorMotionBlur
         void RefreshTray()
         {
             enabledItem.Checked = Settings.Enabled;
-            tray.Text = "CursorMotionBlur - " + (Settings.Enabled ? "on" : "off");
+            tray.Text = AppInfo.Title + " - " + (Settings.Enabled ? "on" : "off");
         }
 
         void ShowSettings()
