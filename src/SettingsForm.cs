@@ -26,6 +26,10 @@ namespace CursorMotionBlur
         [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
 
         const int WM_DPICHANGED = 0x02E0;
+        const int WM_ENTERSIZEMOVE = 0x0231;
+        const int WM_EXITSIZEMOVE = 0x0232;
+        bool inMoveLoop;          // the user is dragging the window right now (Windows runs its own modal loop for that)
+        bool dpiChangedInMove;    // the DPI changed while dragging, so the size must be corrected once the drag ends
 
         int dpi = 96;
         float scale = 1f;
@@ -40,7 +44,8 @@ namespace CursorMotionBlur
         public SettingsForm()
         {
             Text = "CursorMotionBlur";
-            FormBorderStyle = FormBorderStyle.FixedDialog;
+            FormBorderStyle = FormBorderStyle.Sizable;     // resizable by dragging, as a safety net if anything is ever too small
+            AutoScroll = true;                             // ...and it scrolls instead of clipping when it is made smaller than its content
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = true;
@@ -71,12 +76,26 @@ namespace CursorMotionBlur
 
         protected override void WndProc(ref Message m)
         {
+            if (m.Msg == WM_ENTERSIZEMOVE) inMoveLoop = true;
+            if (m.Msg == WM_EXITSIZEMOVE)
+            {
+                inMoveLoop = false;
+                if (dpiChangedInMove)
+                {
+                    // During the drag Windows keeps applying its own size to the window, so fit it only now that the drag is over.
+                    dpiChangedInMove = false;
+                    base.WndProc(ref m);
+                    FitToContent();
+                    return;
+                }
+            }
             if (m.Msg == WM_DPICHANGED)
             {
                 int newDpi = (int)((long)m.WParam & 0xFFFF);
                 var r = (RECT)Marshal.PtrToStructure(m.LParam, typeof(RECT));
                 if (newDpi != dpi)
                 {
+                    if (inMoveLoop) dpiChangedInMove = true;
                     Location = new Point(r.left, r.top);   // Windows' suggested position on the new monitor
                     // Rebuild only after this message has been fully handled: then the window already is "on" the new DPI and
                     // everything is measured exactly as when the window is opened directly on that monitor.
@@ -107,7 +126,7 @@ namespace CursorMotionBlur
             Padding = new Padding(P(12));
 
             // One table, never nested. Every row spans both columns except the two buttons on the last row.
-            table = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.Fill };
+            table = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.None, Location = new Point(Padding.Left, Padding.Top) };
             table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             Controls.Add(table);
