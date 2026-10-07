@@ -20,6 +20,7 @@ namespace CursorMotionBlur
         const double COVER_PX = 10;       // ~how many px of travel one cursor copy "covers" (used to keep the total opacity independent of copy density)
         const int HOLD_MS = 60;           // how long the cursor must stay slow before it comes back
         const int HOTKEY_ID = 1;
+        const int MAX_CACHED = 8;         // cursor pictures kept (shapes x monitor sizes) before the caches are emptied
 
         [StructLayout(LayoutKind.Sequential)] struct POINT { public int x, y; }
         [StructLayout(LayoutKind.Sequential)] struct SIZE { public int cx, cy; }
@@ -41,6 +42,10 @@ namespace CursorMotionBlur
         [DllImport("user32.dll")] static extern bool SystemParametersInfo(uint action, uint param, IntPtr pv, uint winIni);
         [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr h, int id, uint mods, uint vk);
         [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr h, int id);
+        [DllImport("user32.dll")] static extern bool RegisterRawInputDevices(RAWINPUTDEVICE[] devices, uint count, uint size);
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct RAWINPUTDEVICE { public ushort usagePage, usage; public uint flags; public IntPtr target; }
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool GetMonitorInfo(IntPtr mon, ref MONITORINFOEX mi);
         [DllImport("gdi32.dll", CharSet = CharSet.Unicode)] static extern IntPtr CreateDC(string driver, string device, string port, IntPtr devMode);
         [DllImport("gdi32.dll")] static extern int GetDeviceCaps(IntPtr dc, int index);
@@ -75,7 +80,15 @@ namespace CursorMotionBlur
         static readonly uint[] BLANK_IDS = { 32512, 32513, 32515, 32516, 32642, 32643, 32644, 32645, 32646, 32648, 32649, 32651, 32671, 32672 };
 
         // lv[i] = the sprite pre-faded to i/255 opacity, built on first use, so drawing a copy is a plain blit
-        class Sprite { public Bitmap bmp; public int hx, hy; public Bitmap[] lv = new Bitmap[256]; }
+        class Sprite
+        {
+            public Bitmap bmp; public int hx, hy; public Bitmap[] lv = new Bitmap[256];
+            public void Dispose()   // GDI+ bitmaps hold native memory that the garbage collector does not see, so free it explicitly
+            {
+                bmp.Dispose();
+                foreach (var l in lv) if (l != null) l.Dispose();
+            }
+        }
         struct Sample { public int x, y; public long t; }
 
         /// <summary>Raised when the global toggle hotkey (Ctrl+Alt+B) is pressed.</summary>
@@ -105,7 +118,7 @@ namespace CursorMotionBlur
         readonly Dictionary<long, Sprite> scaled = new Dictionary<long, Sprite>();
         readonly ImageAttributes[] attrs = new ImageAttributes[256];
         bool shown;
-        bool wasBlank;
+        long lastDraw;
         Sprite lastSprite;
         IntPtr lastGoodHandle;   // cursor handle that lastSprite was built from
 
@@ -113,6 +126,8 @@ namespace CursorMotionBlur
         IntPtr hwnd;
         volatile bool running = true;
         readonly AutoResetEvent moved = new AutoResetEvent(false);
+        readonly AutoResetEvent mouseWake = new AutoResetEvent(false);   // set by Windows' raw mouse input: wakes the sampler from idle
+        bool rawInputOk;
         IntPtr lastMon;
 
         protected override bool ShowWithoutActivation { get { return true; } }
@@ -146,6 +161,10 @@ namespace CursorMotionBlur
             base.OnHandleCreated(e);
             hwnd = Handle;
             RegisterHotKey(hwnd, HOTKEY_ID, 0x1 | 0x2 | 0x4000, 0x42); // Ctrl+Alt+B, no auto-repeat
+            // Ask Windows to tell this window about every mouse report (even while another app is active), so that the idle
+            // sampler can sleep until the mouse really moves instead of checking every few ms.
+            var mouse = new[] { new RAWINPUTDEVICE { usagePage = 1, usage = 2, flags = 0x100, target = hwnd } };   // generic desktop / mouse, RIDEV_INPUTSINK
+            rawInputOk = RegisterRawInputDevices(mouse, 1, (uint)Marshal.SizeOf(typeof(RAWINPUTDEVICE)));
         }
 
         protected override void OnShown(EventArgs e)
@@ -163,6 +182,7 @@ namespace CursorMotionBlur
         protected override void WndProc(ref Message m)
         {
             if (m.Msg == 0x312 && m.WParam.ToInt32() == HOTKEY_ID && HotkeyPressed != null) HotkeyPressed();
+            if (m.Msg == 0x00FF) mouseWake.Set();   // WM_INPUT: the mouse reported something
             base.WndProc(ref m);
         }
 
@@ -251,8 +271,13 @@ namespace CursorMotionBlur
                 }
                 else
                 {
-                    if (timerHigh && idleFor > 2000) { timeEndPeriod(1); timerHigh = false; }
-                    Thread.Sleep(timerHigh ? 4 : 10);
+                    if (timerHigh) { timeEndPeriod(1); timerHigh = false; }
+                    if (rawInputOk)
+                    {
+                        // sleep until the mouse reports something (the timeout only lets the loop notice that the app is closing)
+                        if (mouseWake.WaitOne(500)) lastMove = sw.ElapsedMilliseconds;
+                    }
+                    else Thread.Sleep(10);                  // no raw input available: fall back to checking every few ms
                 }
             }
         }
@@ -320,8 +345,12 @@ namespace CursorMotionBlur
         {
             while (running)
             {
-                bool fresh = moved.WaitOne(shown ? 4 : 100); // only tick on a timer while a trail is still fading
-                if (!fresh && !shown) continue;
+                bool fresh = moved.WaitOne(shown ? 4 : 250); // only tick on a timer while a trail is still fading
+                if (!fresh && !shown)
+                {
+                    if (canvas != null && sw.ElapsedMilliseconds - lastDraw > 1500) ReleaseCanvas();   // give the memory back while idle
+                    continue;
+                }
                 try { Render(); } catch (Exception ex) { Log("Render: " + ex); }
             }
         }
@@ -359,10 +388,13 @@ namespace CursorMotionBlur
                 ICONINFO ii; GetIconInfo(h, out ii);
                 using (var ic = Icon.FromHandle(h))
                 {
-                    var src = ic.ToBitmap();
-                    var b = new Bitmap(src.Width, src.Height, PixelFormat.Format32bppPArgb);
-                    using (var g = Graphics.FromImage(b)) g.DrawImage(src, 0, 0);
-                    if (IsBlank(b)) b = null; // never keep an empty picture (the cursor may be swapped for the invisible one)
+                    Bitmap b;
+                    using (var src = ic.ToBitmap())
+                    {
+                        b = new Bitmap(src.Width, src.Height, PixelFormat.Format32bppPArgb);
+                        using (var g = Graphics.FromImage(b)) g.DrawImage(src, 0, 0);
+                    }
+                    if (IsBlank(b)) { b.Dispose(); b = null; } // never keep an empty picture (the cursor may be swapped for the invisible one)
                     if (b != null) sp = new Sprite { bmp = b, hx = ii.xHot, hy = ii.yHot };
                     if (sp != null) Log("sprite for handle " + h + ": " + b.Width + "x" + b.Height + " hotspot " + ii.xHot + "," + ii.yHot);
                 }
@@ -372,9 +404,20 @@ namespace CursorMotionBlur
             catch (Exception ex) { Log("GetSprite: " + ex); }
             // Only cache a picture taken while the real cursor is showing. Blanking replaces the cursor's content
             // under the same handle, so a picture grabbed during/after the swap could be the blank one.
-            if (sp != null && blankActive) sp = null;
+            if (sp != null && blankActive) { sp.Dispose(); sp = null; }
             if (sp != null) sprites[h] = sp;
             return sp;
+        }
+
+        // Keep the picture caches small: past a handful of entries (cursor shapes x monitor sizes) release them all, with their
+        // native memory, and rebuild what is needed. Not while the real cursor is hidden: then nothing can be rebuilt.
+        void ForgetOldSprites()
+        {
+            if (blankActive || (sprites.Count <= MAX_CACHED && scaled.Count <= MAX_CACHED)) return;
+            foreach (var s in sprites.Values) if (s != null) s.Dispose();
+            foreach (var s in scaled.Values) s.Dispose();
+            sprites.Clear(); scaled.Clear();
+            lastSprite = null; lastGoodHandle = IntPtr.Zero;   // they pointed into the caches
         }
 
         static bool IsBlank(Bitmap b)
@@ -402,11 +445,9 @@ namespace CursorMotionBlur
                 pts = hist.ToArray();
             }
             if (!visible || pts.Length < 2) { HideOverlay(); return; }
-            // While the real cursor is hidden, keep drawing with the picture taken before it was; after it comes back,
-            // drop the cache so everything is rebuilt from the restored cursors.
+            // While the real cursor is hidden, keep drawing with the picture taken before it was.
+            ForgetOldSprites();
             bool blank = blankActive;
-            if (wasBlank && !blank) { sprites.Clear(); scaled.Clear(); }
-            wasBlank = blank;
             Sprite sp;
             if (blank)
             {
@@ -478,6 +519,7 @@ namespace CursorMotionBlur
             var ps = new POINT();
             var bl = new BLEND { Op = 0, Flags = 0, Alpha = 255, Format = 1 };
             UpdateLayeredWindow(hwnd, screenDc, ref pd, ref sz, memDc, ref ps, 0, ref bl, 2);
+            lastDraw = sw.ElapsedMilliseconds;
             if (!shown)
             {
                 // HWND_TOPMOST, NOMOVE|NOSIZE|NOACTIVATE|SHOWWINDOW
@@ -498,15 +540,21 @@ namespace CursorMotionBlur
         }
 
         // The canvas only ever grows (in 128 px steps); frames draw into its top-left w x h corner.
+        void ReleaseCanvas()
+        {
+            if (canvasG != null) { canvasG.Dispose(); canvasG = null; }
+            if (canvas != null) { canvas.Dispose(); canvas = null; }
+            if (dib != IntPtr.Zero) { SelectObject(memDc, dibOld); DeleteObject(dib); dib = IntPtr.Zero; }
+            canvasW = canvasH = 0;
+        }
+
         void EnsureCanvas(int w, int h)
         {
             if (canvas != null && w <= canvasW && h <= canvasH) return;
             int nw = Math.Max(canvasW, (w + 127) / 128 * 128), nh = Math.Max(canvasH, (h + 127) / 128 * 128);
 
             if (screenDc == IntPtr.Zero) { screenDc = GetDC(IntPtr.Zero); memDc = CreateCompatibleDC(screenDc); }
-            if (canvasG != null) canvasG.Dispose();
-            if (canvas != null) canvas.Dispose();
-            if (dib != IntPtr.Zero) { SelectObject(memDc, dibOld); DeleteObject(dib); }
+            ReleaseCanvas();
 
             var bi = new BITMAPINFOHEADER { biSize = Marshal.SizeOf(typeof(BITMAPINFOHEADER)), biWidth = nw, biHeight = -nh, biPlanes = 1, biBitCount = 32 };
             IntPtr bits;
