@@ -45,6 +45,22 @@ The result is `dist\CursorMotionBlur.exe`. `tools\make-icon.ps1` regenerates `as
 
 A layered, click-through, always-on-top window draws fading copies of the current cursor image along its recent path. Cursor positions are sampled at about 500 Hz, and a frame is drawn for every new mouse position. For the "hide when fast" option the app replaces the static system cursors using `SetSystemCursor` and restores them with `SystemParametersInfo(SPI_SETCURSORS)`.
 
+## Known limit: the blur trails slightly behind the pointer
+
+Windows draws the real mouse pointer at the last possible moment, but any ordinary window (this overlay included) goes through the desktop compositor and appears one to two screen refreshes later. So the front of the blur sits a little behind the pointer, by roughly 10-17 ms of movement, and the faster you move the bigger the gap in pixels. This is why the app can hide the real pointer during very fast movement (the "hide above speed" setting).
+
+Measured from real screen recordings on a 120 Hz monitor (pointer about 25 px wide), how far the front of the blur trails behind the pointer:
+
+| Pointer speed on screen | Gap, in pointer widths |
+| --- | --- |
+| 15-30 cm/s | about 0.6-1.2 |
+| 30-45 cm/s | about 1.3-1.9 |
+| 45-60 cm/s | about 1.8-2.5 |
+| 60-90 cm/s | about 2.3-3.6 |
+| 90+ cm/s | about 3.8 |
+
+These numbers are rough (the test movements were scripted back-and-forth sweeps, so the speed was not perfectly steady). Predicting where the pointer is heading was tried and did not work well for fast curved movement, so it is not part of the app.
+
 ## License
 
 Public domain ([Unlicense](LICENSE)). Anyone can use, copy, modify or sell it, no strings attached.
