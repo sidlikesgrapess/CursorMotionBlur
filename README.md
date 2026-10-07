@@ -4,7 +4,7 @@ A tiny Windows tray app that adds a **live motion blur to your mouse cursor**, s
 
 ![Demo: a real screen recording of the cursor leaving a smooth blur trail that grows with speed, and the real cursor disappearing on very fast flicks](assets/demo.gif)
 
-*Recorded off a real screen on a 120 Hz monitor, with strength 90% and a 30 ms trail (the defaults are a bit subtler, and everything is adjustable live in Settings). A GIF tops out at 50 fps, so here is the [smoother 120 fps video](assets/demo-120fps.mp4).*
+*Recorded off a real screen on a 120 Hz monitor, with strength 90% and a 30 ms trail, which is about what the defaults are now (everything is adjustable live in Settings). A GIF tops out at 50 fps, so here is the [smoother 120 fps video](assets/demo-120fps.mp4).*
 
 - Fading blur trail behind the cursor, drawn in real time at your mouse's polling rate
 - Optionally hides the real cursor when you move very fast, so only the blur remains
