@@ -1,16 +1,41 @@
 using System;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace CursorMotionBlur
 {
-    /// <summary>Settings window. Every change applies immediately, so you can tune it by moving the mouse.</summary>
+    /// <summary>
+    /// Settings window. Every change applies immediately, so you can tune it by moving the mouse.
+    ///
+    /// Display scaling is handled here, with no config file: the window is built from scratch for the DPI of the monitor it is
+    /// on (all sizes are "design pixels at 96 DPI" times a scale factor, the font is given in pixels, and nothing is left to
+    /// WinForms' automatic scaling). When Windows reports a DPI change (the window was dragged to a monitor with different
+    /// scaling) it is simply rebuilt at the new scale, so nothing keeps stale sizes and no label gets clipped.
+    /// </summary>
     sealed class SettingsForm : Form
     {
+        [StructLayout(LayoutKind.Sequential)] struct POINT { public int x, y; }
+        [StructLayout(LayoutKind.Sequential)] struct RECT { public int left, top, right, bottom; }
+        [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(POINT pt, int flags);
+        [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr mon, int type, out uint dx, out uint dy);
+
+        [DllImport("user32.dll")] static extern bool AdjustWindowRectExForDpi(ref RECT r, int style, bool menu, int exStyle, uint dpi);
+        [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+        [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int index);
+        [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
+
+        const int WM_DPICHANGED = 0x02E0;
+
+        int dpi = 96;
+        float scale = 1f;
+        bool loading;
+        Font ownFont;
+
+        TableLayoutPanel table;
         CheckBox chkEnabled, chkHide, chkStartup;
         TrackBar barStrength, barTrail, barSpeed;
         Label lblStrength, lblTrail, lblSpeed;
-        bool loading;
 
         public SettingsForm()
         {
@@ -18,49 +43,88 @@ namespace CursorMotionBlur
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
-            StartPosition = FormStartPosition.CenterScreen;
-            Font = SystemFonts.MessageBoxFont;
-            AutoScaleDimensions = new SizeF(96F, 96F);
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoSize = true;
-            AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            ShowInTaskbar = true;
+            AutoScaleMode = AutoScaleMode.None;           // we do the scaling ourselves
+            AutoSize = false;                             // sized explicitly in FitToContent (see there)
+            StartPosition = FormStartPosition.Manual;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
-            // One auto-sized column; every row sizes itself, so nothing overlaps at any display scaling.
-            var table = new TableLayoutPanel
+            // open centred on the monitor the mouse is on, built for that monitor's DPI
+            var wa = Screen.FromPoint(Cursor.Position).WorkingArea;
+            BuildUi(DpiAt(Cursor.Position.X, Cursor.Position.Y));
+            Location = new Point(wa.Left + (wa.Width - Width) / 2, wa.Top + (wa.Height - Height) / 2);
+        }
+
+        static int DpiAt(int x, int y)
+        {
+            try
             {
-                ColumnCount = 1,
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                Padding = new Padding(16, 12, 16, 12),
-                MinimumSize = new Size(440, 0),
-                Dock = DockStyle.Fill
-            };
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                uint dx, dy;
+                IntPtr mon = MonitorFromPoint(new POINT { x = x, y = y }, 2);
+                if (GetDpiForMonitor(mon, 0, out dx, out dy) == 0 && dx >= 48) return (int)dx;
+            }
+            catch { }
+            return 96;
+        }
+
+        int P(int designPixels) { return (int)Math.Round(designPixels * scale); }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_DPICHANGED)
+            {
+                int newDpi = (int)((long)m.WParam & 0xFFFF);
+                var r = (RECT)Marshal.PtrToStructure(m.LParam, typeof(RECT));
+                if (newDpi != dpi)
+                {
+                    Location = new Point(r.left, r.top);   // Windows' suggested position on the new monitor
+                    // Rebuild only after this message has been fully handled: then the window already is "on" the new DPI and
+                    // everything is measured exactly as when the window is opened directly on that monitor.
+                    BeginInvoke(new Action(delegate
+                    {
+                        BuildUi(newDpi);
+                        var settle = new Timer { Interval = 80 };   // and once more after the frame has settled
+                        settle.Tick += delegate { settle.Stop(); settle.Dispose(); table.PerformLayout(); FitToContent(); };
+                        settle.Start();
+                    }));
+                }
+                m.Result = IntPtr.Zero;
+                return;
+            }
+            base.WndProc(ref m);
+        }
+
+        // (Re)creates every control for the given DPI.
+        void BuildUi(int newDpi)
+        {
+            dpi = newDpi;
+            scale = dpi / 96f;
+            SuspendLayout();
+            var oldFont = ownFont;   // only ever dispose a font this form created (the default font is shared by the whole app)
+            while (Controls.Count > 0) { var c = Controls[0]; Controls.RemoveAt(0); c.Dispose(); }
+            ownFont = new Font("Segoe UI", (float)Math.Round(12 * scale), FontStyle.Regular, GraphicsUnit.Pixel);   // 9 pt at 96 DPI
+            Font = ownFont;
+            Padding = new Padding(P(12));
+
+            // One table, never nested. Every row spans both columns except the two buttons on the last row.
+            table = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.Fill };
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             Controls.Add(table);
 
-            chkEnabled = AddCheck(table, "Enable motion blur   (Ctrl+Alt+B)");
-            barStrength = AddSlider(table, 1, 100, 10, out lblStrength);
-            barTrail = AddSlider(table, 10, 150, 10, out lblTrail);
-            chkHide = AddCheck(table, "Hide the real cursor when moving very fast");
-            barSpeed = AddSlider(table, 20, 300, 20, out lblSpeed);
-            chkStartup = AddCheck(table, "Launch CursorMotionBlur when Windows starts");
+            chkEnabled = AddCheck("Enable motion blur  (Ctrl+Alt+B)");
+            barStrength = AddSlider(1, 100, 10, out lblStrength);
+            barTrail = AddSlider(10, 150, 10, out lblTrail);
+            chkHide = AddCheck("Hide the real cursor when moving very fast");
+            barSpeed = AddSlider(20, 300, 20, out lblSpeed);
+            chkStartup = AddCheck("Launch CursorMotionBlur when Windows starts");
 
-            var buttons = new FlowLayoutPanel
-            {
-                FlowDirection = FlowDirection.RightToLeft,
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                Dock = DockStyle.Fill,
-                Margin = new Padding(0, 12, 0, 0)
-            };
-            var close = new Button { Text = "Close", AutoSize = true, MinimumSize = new Size(90, 30), Margin = new Padding(6, 0, 0, 0) };
-            close.Click += delegate { Close(); };
-            var reset = new Button { Text = "Reset to defaults", AutoSize = true, MinimumSize = new Size(130, 30), Margin = new Padding(0) };
+            var reset = new Button { Text = "Reset to defaults", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Right, Margin = new Padding(0, P(12), P(6), 0), Padding = new Padding(P(6), P(2), P(6), P(2)) };
+            var close = new Button { Text = "Close", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Right, Margin = new Padding(0, P(12), 0, 0), Padding = new Padding(P(10), P(2), P(10), P(2)) };
             reset.Click += delegate { Settings.ResetDefaults(); LoadValues(); };
-            buttons.Controls.Add(close);
-            buttons.Controls.Add(reset);
-            table.Controls.Add(buttons);
+            close.Click += delegate { Close(); };
+            table.Controls.Add(reset);
+            table.Controls.Add(close);
             AcceptButton = close;
 
             chkEnabled.CheckedChanged += delegate { if (!loading) { Settings.Enabled = chkEnabled.Checked; Settings.Save(); } };
@@ -71,6 +135,29 @@ namespace CursorMotionBlur
             barSpeed.ValueChanged += delegate { if (!loading) { Settings.HideSpeedCm = barSpeed.Value; Settings.Save(); } UpdateLabels(); };
 
             LoadValues();
+            ResumeLayout(true);
+            FitToContent();
+            if (oldFont != null) oldFont.Dispose();
+        }
+
+        // Make the client area exactly as big as the content. WinForms (legacy mode) works out the size of the window frame (title
+        // bar, borders) with the system DPI, which is wrong on a monitor with other scaling and clips the bottom row. So the outer
+        // size is computed by Windows itself for the window's real DPI.
+        void FitToContent()
+        {
+            var content = table.GetPreferredSize(Size.Empty);
+            var want = new Size(content.Width + Padding.Horizontal, content.Height + Padding.Vertical);
+            if (!IsHandleCreated) { ClientSize = want; return; }
+            uint wdpi = GetDpiForWindow(Handle);
+            var r = new RECT { left = 0, top = 0, right = want.Width, bottom = want.Height };
+            AdjustWindowRectExForDpi(ref r, GetWindowLong(Handle, -16), false, GetWindowLong(Handle, -20), wdpi == 0 ? (uint)dpi : wdpi);
+            SetWindowPos(Handle, IntPtr.Zero, 0, 0, r.right - r.left, r.bottom - r.top, 0x2 | 0x4 | 0x10);   // NOMOVE | NOZORDER | NOACTIVATE
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            FitToContent();   // the frame size is only known once the window exists
         }
 
         public void LoadValues()
@@ -94,23 +181,26 @@ namespace CursorMotionBlur
             lblSpeed.Text = "Hide above speed: " + barSpeed.Value + " cm/s on screen";
         }
 
-        static CheckBox AddCheck(TableLayoutPanel table, string text)
+        CheckBox AddCheck(string text)
         {
-            var c = new CheckBox { Text = text, AutoSize = true, Margin = new Padding(0, 6, 0, 6) };
+            var c = new CheckBox { Text = text, AutoSize = true, Margin = new Padding(0, P(6), 0, P(2)) };
             table.Controls.Add(c);
+            table.SetColumnSpan(c, 2);
             return c;
         }
 
-        static TrackBar AddSlider(TableLayoutPanel table, int min, int max, int tick, out Label label)
+        TrackBar AddSlider(int min, int max, int tick, out Label label)
         {
-            label = new Label { AutoSize = true, Margin = new Padding(0, 8, 0, 0) };
+            label = new Label { AutoSize = true, Margin = new Padding(0, P(10), 0, 0) };
             var bar = new TrackBar
             {
                 Minimum = min, Maximum = max, TickFrequency = tick, SmallChange = Math.Max(1, tick / 5), LargeChange = tick,
-                Dock = DockStyle.Fill, AutoSize = true, Margin = new Padding(0, 0, 0, 4)
+                AutoSize = false, Width = P(300), Height = P(32), Margin = new Padding(0)
             };
             table.Controls.Add(label);
+            table.SetColumnSpan(label, 2);
             table.Controls.Add(bar);
+            table.SetColumnSpan(bar, 2);
             return bar;
         }
     }

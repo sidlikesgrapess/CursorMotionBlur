@@ -68,7 +68,7 @@ namespace CursorMotionBlur
         [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr ctx);
 
         [STAThread]
-        static void Main()
+        static void Main(string[] args)
         {
             bool created;
             using (new Mutex(true, "CursorMotionBlur.SingleInstance", out created))
@@ -86,7 +86,7 @@ namespace CursorMotionBlur
 
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                Application.Run(new TrayApp(firstRun));
+                Application.Run(new TrayApp(firstRun || Array.IndexOf(args, "--settings") >= 0));
             }
         }
     }

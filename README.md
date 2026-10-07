@@ -9,7 +9,7 @@ A tiny Windows tray app that adds a **live motion blur to your mouse cursor**, s
 - Fading blur trail behind the cursor, drawn in real time at your mouse's polling rate
 - Optionally hides the real cursor when you move very fast, so only the blur remains
 - Works across multiple monitors with different resolutions and display scaling
-- Lightweight: a single ~35 KB `.exe`, no installer, no runtime to install (uses the .NET Framework already in Windows 10/11), about 1% of one CPU core while idle
+- Lightweight: a single ~40 KB `.exe` (nothing else to download or keep next to it), no installer, no runtime to install (uses the .NET Framework already in Windows 10/11), about 1% of one CPU core while idle
 
 ## Use it
 
