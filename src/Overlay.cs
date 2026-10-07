@@ -18,7 +18,8 @@ namespace CursorMotionBlur
     {
         const int MAX_COPIES = 70;        // dense, faint copies read as a smooth blur rather than separate ghosts
         const double COVER_PX = 10;       // ~how many px of travel one cursor copy "covers" (used to keep the total opacity independent of copy density)
-        const int HOLD_MS = 60;           // how long the cursor must stay slow before it comes back
+        const int HOLD_MS = 10;           // how long after the last fast moment the cursor may come back (the speed band between hide and show speed already prevents flicker)
+        const int SHOW_WINDOW_MS = 12;    // the speed that brings the cursor back is measured over just this many ms
         const int HOTKEY_ID = 1;
         const int MAX_CACHED = 8;         // cursor pictures kept (shapes x monitor sizes) before the caches are emptied
 
@@ -255,8 +256,20 @@ namespace CursorMotionBlur
                             }
                             double speed = path * 1000.0 / dt;
                             double hide = Settings.HideSpeedCm * monPxPerCm; // px/s on the monitor the cursor is on
+                            // Hiding looks at the whole trail window (steady). Bringing the cursor back looks at only the last few ms,
+                            // so it returns as soon as the mouse stops or slows, not 30 ms later when the fast part has left the window.
+                            int j = hist.Count - 1;
+                            while (j > 0 && now - hist[j - 1].t <= SHOW_WINDOW_MS) j--;
+                            double recentPath = 0;
+                            for (int i = j + 1; i < hist.Count; i++)
+                            {
+                                double ddx = hist[i].x - hist[i - 1].x, ddy = hist[i].y - hist[i - 1].y;
+                                recentPath += Math.Sqrt(ddx * ddx + ddy * ddy);
+                            }
+                            long recentDt = now - hist[j].t;
+                            double recent = recentDt >= 4 ? recentPath * 1000.0 / recentDt : speed;
                             if (speed > hide) { hideWanted = true; lastFast = now; }
-                            else if (hideWanted && speed < hide * 0.5 && now - lastFast > HOLD_MS) hideWanted = false;
+                            else if (hideWanted && recent < hide * 0.5 && now - lastFast > HOLD_MS) hideWanted = false;
                         }
                         if (hideWanted != wasHidden) hideChanged.Set();
                     }
@@ -264,7 +277,7 @@ namespace CursorMotionBlur
 
                 // poll fast while the mouse is moving; back off (and drop the 1 ms system timer) when idle
                 long idleFor = sw.ElapsedMilliseconds - lastMove;
-                if (idleFor < Settings.TrailMs + 40)
+                if (idleFor < Settings.TrailMs + 40 || hideWanted)   // never go to sleep while the real cursor is hidden: it has to be given back
                 {
                     if (!timerHigh) { timeBeginPeriod(1); timerHigh = true; }
                     Thread.Sleep(2); // the mouse reports at ~125 Hz, so 500 Hz sampling is plenty
