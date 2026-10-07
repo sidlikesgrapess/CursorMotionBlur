@@ -16,7 +16,7 @@ namespace CursorMotionBlur
     /// </summary>
     sealed class Overlay : Form
     {
-        const int MAX_COPIES = 100;       // dense, faint copies read as a smooth blur rather than separate ghosts
+        const int MAX_COPIES = 70;        // dense, faint copies read as a smooth blur rather than separate ghosts
         const double COVER_PX = 10;       // ~how many px of travel one cursor copy "covers" (used to keep the total opacity independent of copy density)
         const int HOLD_MS = 60;           // how long the cursor must stay slow before it comes back
         const int HOTKEY_ID = 1;
