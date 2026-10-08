@@ -1,4 +1,5 @@
-﻿// CPU renderer: blends the copies by hand into a bitmap and shows it with a layered window (UpdateLayeredWindow).
+// Draws the copies: blends them by hand into a bitmap and shows it with a layered window (UpdateLayeredWindow). This
+// beat a Direct3D + DirectComposition version on both CPU and memory (the graphics driver alone takes ~20 MB).
 #include "app.h"
 #include <stdlib.h>
 #include <string.h>
@@ -12,7 +13,6 @@ static int canvasW, canvasH;
 static UINT32 *pic;             // the cursor picture at the drawn size
 static int *span;               // per row of pic: first and one-past-last visible pixel (most of a cursor is transparent)
 static int picId, picW, picH;
-static int lastW, lastH;        // size of the last frame: the window keeps the canvas size, so that part is cleared too
 
 static void CreateOverlay(void)
 {
@@ -121,19 +121,16 @@ BOOL R_Draw(const Sprite *sp, int sw, int sh, const Copy *c, int n, int x, int y
     Resize(sp, sw, sh);
     EnsureCanvas(w, h);
     if (!dib || !pic) return FALSE;
-    int cw = w > lastW ? w : lastW, ch = h > lastH ? h : lastH;
-    if (cw > canvasW) cw = canvasW;
-    if (ch > canvasH) ch = canvasH;
-    for (int r = 0; r < ch; r++) memset(bits + r * canvasW, 0, cw * 4);
-    lastW = w; lastH = h;
+    for (int r = 0; r < h; r++) memset(bits + r * canvasW, 0, w * 4);
     for (int i = 0; i < n; i++)
     {
         int a = (int)(c[i].a * 255 + 0.5f);
         if (a > 0 && c[i].x >= 0 && c[i].y >= 0 && c[i].x + sw <= w && c[i].y + sh <= h) Blend(a, c[i].x, c[i].y);
     }
-    // The window keeps the size of the canvas: Windows then reuses its surface instead of making a new one every frame.
+    // The window is resized to the frame every time. Keeping it at the canvas size and only moving it is a little cheaper, but
+    // Windows can then show the move a frame before the new picture, and the blur jitters.
     POINT dst = { x, y }, src = { 0, 0 };
-    SIZE size = { canvasW, canvasH };
+    SIZE size = { w, h };
     BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
     UpdateLayeredWindow(wnd, NULL, &dst, &size, memDc, &src, 0, &bf, ULW_ALPHA);
     if (!IsWindowVisible(wnd)) SetWindowPos(wnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -146,5 +143,4 @@ void R_Trim(void)
 {
     ReleaseCanvas();
     free(pic); pic = NULL;
-    lastW = lastH = 0;
 }

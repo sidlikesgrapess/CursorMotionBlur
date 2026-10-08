@@ -1,4 +1,4 @@
-﻿// The engine: three threads.
+// The engine: three threads.
 //   sampler  records where the cursor is on every mouse report and decides when the real cursor should be hidden
 //   hider    swaps the system cursors for an invisible one and back (restoring takes ~20 ms, so it runs on its own)
 //   render   works out the fading copies along the recent path and hands them to the renderer; it owns the overlay window
@@ -127,7 +127,9 @@ static DWORD WINAPI SampleLoop(void *unused)
                 HMONITOR main = MonitorFromPoint((POINT){ 0, 0 }, MONITOR_DEFAULTTOPRIMARY);
                 GetDpiForMonitor(main, MDT_EFFECTIVE_DPI, &dx, &dy);
                 MonitorMetrics(main, dx, &mainPxPerCm, &mainHz);
-                monGap = 1000 / hz - 1 > 3 ? 1000 / hz - 1 : 3;
+                // Half a refresh: a whole one is too coarse, because the frames are not timed to the screen's refreshes, so the
+                // blur would be fresh on some refreshes and almost a refresh old on others, and jitter against the pointer.
+                monGap = 500 / hz > 3 ? 500 / hz : 3;
             }
 
             LONGLONG now = Now();

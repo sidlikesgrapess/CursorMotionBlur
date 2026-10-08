@@ -1,4 +1,4 @@
-﻿// The settings window, and the manual update check.
+// The settings window, and the manual update check.
 //
 // Every change applies at once, so it can be tuned by moving the mouse. The window is laid out by hand: sizes are "design
 // pixels at 96 DPI" times the scale of the monitor it is on, and it is laid out again when Windows reports a new DPI (the

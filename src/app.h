@@ -1,8 +1,8 @@
-﻿// CursorMotionBlur: a live motion blur for the Windows mouse cursor.
+// CursorMotionBlur: a live motion blur for the Windows mouse cursor.
 //
 //   main.c        start-up, tray icon, hotkey, settings file, launch at startup
 //   engine.c      records the cursor path, hides the real cursor when fast, works out the blur copies for each frame
-//   render_*.c*   draws those copies: render_gpu.cpp (Direct3D + DirectComposition) or render_cpu.c (by hand + layered window)
+//   render.c      draws those copies (blended by hand, shown with a layered window)
 //   ui.c          the settings window and the update check
 #pragma once
 #ifndef UNICODE
@@ -53,7 +53,7 @@ void Engine_RestoreCursors(void);       // put the real cursors back (exit, cras
 void Engine_DisplayChanged(void);       // monitors, scaling or cursor scheme changed
 #define WM_APP_PAUSED (WM_APP + 2)      // engine -> main window: wParam = paused for a fullscreen app
 
-// ---- renderer (render_gpu.cpp or render_cpu.c), called only from the engine's render thread ----
+// ---- renderer (render.c), called only from the engine's render thread ----
 typedef struct { int w, h, hx, hy, id; UINT32 *px; } Sprite;   // cursor picture at its own size: premultiplied BGRA, hotspot
 typedef struct { int x, y; float a; } Copy;                     // one copy: top-left (relative to the frame box), opacity 0-1
 

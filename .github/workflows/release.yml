@@ -14,6 +14,13 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install llvm-mingw (clang for Windows)
+        shell: pwsh
+        run: |
+          $v = '20260616'
+          Invoke-WebRequest "https://github.com/mstorsjo/llvm-mingw/releases/download/$v/llvm-mingw-$v-ucrt-x86_64.zip" -OutFile llvm.zip
+          Expand-Archive llvm.zip -DestinationPath $env:RUNNER_TEMP
+          "$env:RUNNER_TEMP\llvm-mingw-$v-ucrt-x86_64\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
       - name: Build
         shell: pwsh
         run: ./build.ps1

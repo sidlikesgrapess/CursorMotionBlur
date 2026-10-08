@@ -1,4 +1,4 @@
-﻿// Start-up, tray icon, global hotkey, the settings file and "launch when Windows starts".
+// Start-up, tray icon, global hotkey, the settings file and "launch when Windows starts".
 #include "app.h"
 #include <shellapi.h>
 #include <shlobj.h>
