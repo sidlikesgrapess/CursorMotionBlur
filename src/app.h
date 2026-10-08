@@ -17,7 +17,7 @@ extern "C" {
 #endif
 
 #define APP_NAME    L"CursorMotionBlur"
-#define APP_VERSION L"1.1.0"
+#define APP_VERSION L"2.0.0"
 #define APP_TITLE   APP_NAME L" v" APP_VERSION
 #define REPO        L"sidlikesgrapess/CursorMotionBlur"
 
