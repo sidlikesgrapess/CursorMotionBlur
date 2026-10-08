@@ -1,15 +1,21 @@
-# Builds dist\CursorMotionBlur.exe (a single self-contained file) with the C# compiler that ships with Windows (.NET Framework 4.x) - no SDK needed.
+# Builds dist\CursorMotionBlur.exe with clang from llvm-mingw (https://github.com/mstorsjo/llvm-mingw): a single small exe that
+# needs nothing but Windows 10/11. Pass -Renderer cpu to build the CPU renderer instead of the GPU one.
+param([ValidateSet('gpu', 'cpu')] [string]$Renderer = 'gpu', [string]$Out = "$PSScriptRoot\dist\CursorMotionBlur.exe")
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
-$csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-if (-not (Test-Path $csc)) { throw "csc.exe not found at $csc" }
+$Out = [IO.Path]::GetFullPath($Out)
+if (-not (Get-Command clang -ErrorAction SilentlyContinue)) { throw 'clang not found: install llvm-mingw and put its bin folder on PATH' }
 
-New-Item -ItemType Directory -Force (Join-Path $root 'dist') | Out-Null
-& $csc -nologo -optimize+ -unsafe -target:winexe `
-    -win32icon:"$root\assets\icon.ico" `
-    -win32manifest:"$root\app.manifest" `
-    -r:System.Windows.Forms.dll -r:System.Drawing.dll `
-    -out:"$root\dist\CursorMotionBlur.exe" `
-    "$root\src\*.cs"
-if ($LASTEXITCODE -ne 0) { throw "build failed" }
-"Built $root\dist\CursorMotionBlur.exe"
+New-Item -ItemType Directory -Force "$root\dist" | Out-Null
+Push-Location "$root\src"
+try {
+    & windres app.rc -O coff -o "$root\dist\app.res"
+    if ($LASTEXITCODE -ne 0) { throw 'resource build failed' }
+    [string[]]$render = if ($Renderer -eq 'gpu') { 'render_gpu.cpp', '-ld3d11', '-ldcomp' } else { 'render_cpu.c' }
+    & clang -O2 -s -municode -mwindows -fno-exceptions -fno-rtti -fno-asynchronous-unwind-tables -Wall `
+        main.c engine.c ui.c $render "$root\dist\app.res" `
+        -luser32 -lgdi32 -lshell32 -ladvapi32 -lcomctl32 -lwinhttp -lwinmm -lshcore `
+        -o $Out
+    if ($LASTEXITCODE -ne 0) { throw 'build failed' }
+} finally { Pop-Location; Remove-Item "$root\dist\app.res" -ErrorAction SilentlyContinue }
+"Built $Out ($Renderer renderer, $((Get-Item $Out).Length) bytes)"
