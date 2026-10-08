@@ -23,8 +23,8 @@ made of your own cursor picture.)
 ![Demo](https://raw.githubusercontent.com/sidlikesgrapess/CursorMotionBlur/main/assets/demo.gif)
 
 ## Features
-- Uses your real cursor: any scheme, size or colour, and whatever shape it has
-  right now (arrow, text, hand...).
+- Uses your real cursor: your scheme, size and colour, and whatever shape it
+  has right now (arrow, text, hand...).
 - Right size on every monitor, including monitors with different scaling.
 - Optionally hides the real pointer during very fast movement so only the blur
   shows; it comes back about 25 ms after you slow down.
@@ -47,13 +47,10 @@ made of your own cursor picture.)
   front.
 
 ## Resource use
-- No CPU while the mouse is still: it sleeps until the mouse moves.
-- Light while moving: it draws at most one frame per mouse report (or half a
-  screen refresh), typically well under 1% of the CPU.
-- About 1.5 MB of memory. No graphics driver is loaded.
-- While an administrator window (Task Manager, Windhawk itself...) is in front,
-  Windows sends no mouse input to normal apps, so the mod checks the cursor
-  every 10 ms instead; still very light.
+- No CPU while the mouse is still; typically well under 1% while it moves, and
+  about 1.5 MB of memory at the default settings.
+- While an administrator window (Task Manager, Windhawk...) is in front,
+  Windows gives the mod no mouse input, so it checks the cursor on a timer.
 
 ## Troubleshooting
 - **The cursor stays invisible** (only possible with hiding on, e.g. if the
@@ -170,22 +167,28 @@ static void LoadSettings() {
     g_pauseInFullscreen = Wh_GetIntSetting(L"pauseInFullscreen") != 0;
 }
 
-// A monitor's physical pixel density, from the size Windows reports for it (its DPI setting if that looks wrong), and
-// its refresh rate.
-static void MonitorMetrics(HMONITOR mon, UINT dpi, double* pxPerCm, int* hz) {
-    *pxPerCm = dpi / 2.54 < 20 ? 20 : dpi / 2.54;
-    *hz = 60;
+// A monitor's refresh rate.
+static int RefreshRate(HMONITOR mon) {
     MONITORINFOEXW mi;
     mi.cbSize = sizeof(mi);
-    if (!GetMonitorInfoW(mon, &mi)) return;
     DEVMODEW dm = {};
     dm.dmSize = sizeof(dm);
-    if (EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1) *hz = dm.dmDisplayFrequency;
+    if (GetMonitorInfoW(mon, &mi) && EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1)
+        return dm.dmDisplayFrequency;
+    return 60;
+}
+
+// A monitor's physical pixel density, from the size Windows reports for it (its DPI setting if that looks wrong).
+static double PixelsPerCm(HMONITOR mon, UINT dpi) {
+    double fallback = dpi / 2.54 < 20 ? 20 : dpi / 2.54;
+    MONITORINFOEXW mi;
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(mon, &mi)) return fallback;
     HDC dc = CreateDCW(L"DISPLAY", mi.szDevice, nullptr, nullptr);
-    if (!dc) return;
+    if (!dc) return fallback;
     int mm = GetDeviceCaps(dc, HORZSIZE), px = GetDeviceCaps(dc, HORZRES);
     DeleteDC(dc);
-    if (mm >= 150 && mm <= 2500 && px >= 320) *pxPerCm = px / (mm / 10.0);
+    return mm >= 150 && mm <= 2500 && px >= 320 ? px / (mm / 10.0) : fallback;
 }
 
 static bool FullscreenAppRunning() {
@@ -197,7 +200,8 @@ static bool FullscreenAppRunning() {
 static void ReloadCursors() { SystemParametersInfoW(SPI_SETCURSORS, 0, nullptr, 0); }
 
 // Whether our invisible cursor is in place, also kept in the mod's storage: if the process is ever killed while hiding,
-// the next start knows to put the user's cursors back (and otherwise leaves the cursor scheme alone).
+// the next start knows to put the user's cursors back (and otherwise leaves the cursor scheme alone). That is a storage
+// write per hide and per restore, only while hiding is switched on: a deliberate trade for being able to recover.
 static void SetBlank(bool on) {
     g_blankActive = on;
     Wh_SetIntValue(L"cursorsHidden", on);
@@ -206,6 +210,7 @@ static void SetBlank(bool on) {
 // ---- sampler ----
 
 static DWORD WINAPI SampleThread(void*) {
+    SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);   // cursor positions in physical pixels
     HMONITOR lastMon = nullptr;
     LONGLONG lastMove = 0, lastFast = 0, lastFullscreenCheck = -1000;
     bool paused = false, timerHigh = false;
@@ -248,23 +253,21 @@ static DWORD WINAPI SampleThread(void*) {
 
             // crossing to another monitor: drop the trail so it doesn't smear across the gap
             HMONITOR mon = changed ? MonitorFromPoint(ci.ptScreenPos, MONITOR_DEFAULTTONEAREST) : lastMon;
-            if (mon != lastMon || g_monStale.exchange(false)) {
+            bool stale = g_monStale.exchange(false);
+            if (mon != lastMon || stale) {
                 g_histN = 0;
                 lastMon = mon;
                 UINT dpi = 96, mainDpi = 96, dy;
-                int hz, mainHz;
-                double pxPerCm, mainPxPerCm;
                 GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &dpi, &dy);
                 g_monCursor = GetSystemMetricsForDpi(SM_CXCURSOR, dpi);
-                MonitorMetrics(mon, dpi, &pxPerCm, &hz);
+                int hz = RefreshRate(mon);
                 // The hide speed is set in cm/s as measured on the main monitor. Windows moves the pointer further on a
                 // monitor with more scaling (twice the pixels at 200%), so scale it by the DPI to hide at the same hand
                 // speed on every monitor.
                 POINT origin = {0, 0};
                 HMONITOR mainMon = MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
                 GetDpiForMonitor(mainMon, MDT_EFFECTIVE_DPI, &mainDpi, &dy);
-                MonitorMetrics(mainMon, mainDpi, &mainPxPerCm, &mainHz);
-                g_hidePxPerCm = mainPxPerCm * dpi / mainDpi;
+                g_hidePxPerCm = PixelsPerCm(mainMon, mainDpi) * dpi / mainDpi;
                 // Half a refresh: frames are not timed to the screen's refreshes, so a whole one would leave the blur
                 // fresh on some refreshes and almost a refresh old on others, and it would jitter against the pointer.
                 g_monGap = 500 / hz > 3 ? 500 / hz : 3;
@@ -329,9 +332,11 @@ static DWORD WINAPI SampleThread(void*) {
             WaitForSingleObject(g_mouseWake, hidden ? 2 : 10);
         } else {
             if (timerHigh) { timeEndPeriod(1); timerHigh = false; }
-            // sleep until the mouse moves; while an app hides the cursor, just look once per report. While an administrator
-            // window is in front no mouse reports arrive, so look every 10 ms instead.
-            if (WaitForSingleObject(g_mouseWake, g_adminFront ? 10 : INFINITE) == WAIT_OBJECT_0 && visible) lastMove = Now();
+            // Sleep until the mouse moves; while an app hides the cursor, just look once per report. While a window with more
+            // rights is in front no mouse reports arrive, so look every 10 ms instead, and every 100 ms once the mouse has
+            // been still for a second.
+            DWORD poll = !g_adminFront ? INFINITE : Now() - lastMove < 1000 ? 10 : 100;
+            if (WaitForSingleObject(g_mouseWake, poll) == WAIT_OBJECT_0 && visible) lastMove = Now();
         }
     }
     if (timerHigh) timeEndPeriod(1);
@@ -727,6 +732,8 @@ static LRESULT CALLBACK OverlayProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 // Draws when the mouse moves, at most once per half refresh of the monitor, and keeps drawing until the trail has faded
 // after a stop. Idle, it wakes once more to give back memory, then sleeps until the mouse moves.
 static DWORD WINAPI RenderThread(void*) {
+    // physical pixels on every monitor (the overlay is placed and sized in them), whatever the host process uses
+    SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     HINSTANCE inst = GetModuleHandleW(nullptr);
     WNDCLASSW wc = {};
     wc.lpfnWndProc = OverlayProc;
