@@ -17,6 +17,7 @@ namespace CursorMotionBlur
         public TrayApp(bool firstRun)
         {
             overlay.Show(); // hidden layered window; needed to host the hotkey and the drawing
+            Settings.ApplyHotkey = overlay.ApplyHotkey;   // the settings window re-registers the shortcut through this
             overlay.HotkeyPressed += delegate { Settings.Enabled = !Settings.Enabled; Settings.Save(); RefreshTray(); };
 
             enabledItem = new ToolStripMenuItem("Enabled", null, delegate { Settings.Enabled = !Settings.Enabled; Settings.Save(); RefreshTray(); });

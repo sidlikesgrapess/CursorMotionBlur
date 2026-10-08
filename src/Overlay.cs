@@ -11,17 +11,16 @@ namespace CursorMotionBlur
 {
     /// <summary>
     /// Click-through, always-on-top layered window that draws fading copies of the cursor along its
-    /// recent path. A sampler thread records the cursor path (~1 kHz); a render thread redraws on every
+    /// recent path. A sampler thread records the cursor path on every mouse report; a render thread redraws on every
     /// new mouse position; a third thread swaps the real cursor for a blank one at very high speed.
     /// </summary>
     sealed class Overlay : Form
     {
-        const int MAX_COPIES = 70;        // dense, faint copies read as a smooth blur rather than separate ghosts
         const double COVER_PX = 10;       // ~how many px of travel one cursor copy "covers" (used to keep the total opacity independent of copy density)
         const int HOLD_MS = 10;           // how long after the last fast moment the cursor may come back (the speed band between hide and show speed already prevents flicker)
         const int SHOW_WINDOW_MS = 12;    // the speed that brings the cursor back is measured over just this many ms
         const int HOTKEY_ID = 1;
-        const int MAX_CACHED = 8;         // cursor pictures kept (shapes x monitor sizes) before the caches are emptied
+        const int MAX_CACHED = 16;        // cursor pictures kept (shapes x monitor sizes) before the cache is emptied
 
         [StructLayout(LayoutKind.Sequential)] struct POINT { public int x, y; }
         [StructLayout(LayoutKind.Sequential)] struct SIZE { public int cx, cy; }
@@ -43,6 +42,7 @@ namespace CursorMotionBlur
         [DllImport("user32.dll")] static extern bool SystemParametersInfo(uint action, uint param, IntPtr pv, uint winIni);
         [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr h, int id, uint mods, uint vk);
         [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr h, int id);
+        [DllImport("shell32.dll")] static extern int SHQueryUserNotificationState(out int state);
         [DllImport("user32.dll")] static extern bool RegisterRawInputDevices(RAWINPUTDEVICE[] devices, uint count, uint size);
 
         [StructLayout(LayoutKind.Sequential)]
@@ -80,19 +80,31 @@ namespace CursorMotionBlur
         // static system cursors blanked while the mouse is fast (animated wait/appstarting are left alone)
         static readonly uint[] BLANK_IDS = { 32512, 32513, 32515, 32516, 32642, 32643, 32644, 32645, 32646, 32648, 32649, 32651, 32671, 32672 };
 
-        // lv[i] = the sprite pre-faded to i/255 opacity, built on first use, so drawing a copy is a plain blit
+        // A cursor picture: the bitmap (kept to make resized copies from) and its premultiplied pixels, which Blend draws
         class Sprite
         {
-            public Bitmap bmp; public int hx, hy; public Bitmap[] lv = new Bitmap[256];
-            public void Dispose()   // GDI+ bitmaps hold native memory that the garbage collector does not see, so free it explicitly
+            public readonly Bitmap bmp; public readonly int hx, hy, w, h; public readonly uint[] px;
+            public Sprite(Bitmap b, int hotX, int hotY)
             {
-                bmp.Dispose();
-                foreach (var l in lv) if (l != null) l.Dispose();
+                bmp = b; hx = hotX; hy = hotY; w = b.Width; h = b.Height;
+                var raw = new int[w * h];
+                var d = b.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
+                Marshal.Copy(d.Scan0, raw, 0, raw.Length);
+                b.UnlockBits(d);
+                px = new uint[raw.Length];
+                for (int i = 0; i < px.Length; i++)   // no colour brighter than its opacity (resizing can overshoot), so blending can't overflow
+                {
+                    uint p = (uint)raw[i], a = p >> 24;
+                    px[i] = a << 24 | Math.Min((p >> 16) & 255, a) << 16 | Math.Min((p >> 8) & 255, a) << 8 | Math.Min(p & 255, a);
+                }
             }
+            public bool Empty { get { return Array.TrueForAll(px, p => p == 0); } }
+            public void Dispose() { bmp.Dispose(); }   // GDI+ bitmaps hold native memory that the garbage collector does not see
         }
         struct Sample { public int x, y; public long t; }
+        static double Dist(Sample a, Sample b) { double dx = b.x - a.x, dy = b.y - a.y; return Math.Sqrt(dx * dx + dy * dy); }
 
-        /// <summary>Raised when the global toggle hotkey (Ctrl+Alt+B) is pressed.</summary>
+        /// <summary>Raised when the global toggle hotkey is pressed.</summary>
         public event Action HotkeyPressed;
 
         // shared between sampler and render threads (guarded by gate)
@@ -111,13 +123,11 @@ namespace CursorMotionBlur
         bool timerHigh;
 
         // render thread only: one reusable canvas (a DIB section wrapped by a Bitmap) instead of a bitmap per frame
-        IntPtr screenDc, memDc, dib, dibOld;
-        Bitmap canvas;
-        Graphics canvasG;
+        IntPtr screenDc, memDc, dib, dibOld, bits;
+        Sample[] pts = new Sample[64];   // the path copied out of hist for each frame
         int canvasW, canvasH;
-        readonly Dictionary<IntPtr, Sprite> sprites = new Dictionary<IntPtr, Sprite>();
-        readonly Dictionary<long, Sprite> scaled = new Dictionary<long, Sprite>();
-        readonly ImageAttributes[] attrs = new ImageAttributes[256];
+        readonly Dictionary<long, Sprite> sprites = new Dictionary<long, Sprite>();   // by cursor handle and size
+        readonly HashSet<IntPtr> emptyCursors = new HashSet<IntPtr>();   // cursors an app made invisible on purpose: no blur for them
         bool shown;
         long lastDraw;
         Sprite lastSprite;
@@ -128,7 +138,9 @@ namespace CursorMotionBlur
         volatile bool running = true;
         readonly AutoResetEvent moved = new AutoResetEvent(false);
         readonly AutoResetEvent mouseWake = new AutoResetEvent(false);   // set by Windows' raw mouse input: wakes the sampler from idle
-        bool rawInputOk;
+        volatile bool rawInputOk;
+        long lastFullscreenCheck;
+        bool paused;              // a fullscreen app or game is in front: the blur is switched off
         IntPtr lastMon;
 
         protected override bool ShowWithoutActivation { get { return true; } }
@@ -149,23 +161,33 @@ namespace CursorMotionBlur
             StartPosition = FormStartPosition.Manual;
             Location = new Point(-32000, -32000);
             Size = new Size(1, 1);
-
-            for (int i = 0; i <= 255; i++)
-            {
-                var m = new ColorMatrix(); m.Matrix33 = i / 255f;
-                var a = new ImageAttributes(); a.SetColorMatrix(m); attrs[i] = a;
-            }
         }
 
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
             hwnd = Handle;
-            RegisterHotKey(hwnd, HOTKEY_ID, 0x1 | 0x2 | 0x4000, 0x42); // Ctrl+Alt+B, no auto-repeat
-            // Ask Windows to tell this window about every mouse report (even while another app is active), so that the idle
-            // sampler can sleep until the mouse really moves instead of checking every few ms.
-            var mouse = new[] { new RAWINPUTDEVICE { usagePage = 1, usage = 2, flags = 0x100, target = hwnd } };   // generic desktop / mouse, RIDEV_INPUTSINK
-            rawInputOk = RegisterRawInputDevices(mouse, 1, (uint)Marshal.SizeOf(typeof(RAWINPUTDEVICE)));
+            ApplyHotkey();
+            Settings.EnabledChanged = ListenToMouse;
+            ListenToMouse();
+        }
+
+        // While enabled, ask Windows to tell this window about every mouse report (even while another app is active), so the
+        // sampler can sleep until the mouse really moves. While switched off, stop listening. The wake lets the sampler see the change.
+        void ListenToMouse()
+        {
+            bool on = Settings.Enabled;
+            var mouse = new[] { new RAWINPUTDEVICE { usagePage = 1, usage = 2, flags = on ? 0x100u : 0x1u, target = on ? hwnd : IntPtr.Zero } };   // mouse; RIDEV_INPUTSINK or RIDEV_REMOVE
+            bool ok = RegisterRawInputDevices(mouse, 1, (uint)Marshal.SizeOf(typeof(RAWINPUTDEVICE)));
+            if (on) rawInputOk = ok;
+            mouseWake.Set();
+        }
+
+        /// <summary>Registers the on/off shortcut from the settings; false if another app already owns that combination.</summary>
+        public bool ApplyHotkey()
+        {
+            UnregisterHotKey(hwnd, HOTKEY_ID);
+            return RegisterHotKey(hwnd, HOTKEY_ID, Settings.HotkeyMods | 0x4000, Settings.HotkeyKey);   // 0x4000 = no auto-repeat
         }
 
         protected override void OnShown(EventArgs e)
@@ -174,7 +196,7 @@ namespace CursorMotionBlur
             ShowWindow(hwnd, 0);
             // grab the current cursor's picture now, before any fast movement can hide it
             var ci = new CURSORINFO { cbSize = Marshal.SizeOf(typeof(CURSORINFO)) };
-            if (GetCursorInfo(ref ci) && (ci.flags & 1) != 0) { lastSprite = GetSprite(ci.hCursor); lastGoodHandle = ci.hCursor; }
+            if (GetCursorInfo(ref ci) && (ci.flags & 1) != 0) { lastSprite = GetSprite(ci.hCursor, 0); lastGoodHandle = ci.hCursor; }
             new Thread(SampleLoop) { IsBackground = true, Priority = ThreadPriority.AboveNormal }.Start();
             new Thread(RenderLoop) { IsBackground = true, Priority = ThreadPriority.AboveNormal }.Start();
             new Thread(HideLoop) { IsBackground = true }.Start();
@@ -201,11 +223,35 @@ namespace CursorMotionBlur
             SystemParametersInfo(0x57, 0, IntPtr.Zero, 0); // SPI_SETCURSORS
         }
 
-        // ~1 kHz cursor path recording and speed measurement
+        // 2 = a fullscreen app is in front, 3 = a Direct3D fullscreen game, 4 = presentation mode
+        static bool FullscreenAppRunning()
+        {
+            int state;
+            return SHQueryUserNotificationState(out state) == 0 && (state == 2 || state == 3 || state == 4);
+        }
+
+        // cursor path recording (on every mouse report) and speed measurement
         void SampleLoop()
         {
             while (running)
             {
+                long checkedAt = sw.ElapsedMilliseconds;
+                if (checkedAt - lastFullscreenCheck >= 500)
+                {
+                    lastFullscreenCheck = checkedAt;
+                    bool wasPaused = paused;
+                    paused = Settings.PauseInFullscreen && FullscreenAppRunning();
+                    if (paused != wasPaused) Log("paused for a fullscreen app: " + paused);
+                }
+                if (paused || !Settings.Enabled)
+                {
+                    lock (gate) { curVisible = false; hist.Clear(); if (hideWanted) { hideWanted = false; hideChanged.Set(); } }
+                    if (timerHigh) { timeEndPeriod(1); timerHigh = false; }
+                    // nothing to do: look for the fullscreen app leaving 4 times a second, or sleep until switched back on
+                    if (Settings.Enabled) Thread.Sleep(250); else mouseWake.WaitOne();
+                    continue;
+                }
+
                 var ci = new CURSORINFO { cbSize = Marshal.SizeOf(typeof(CURSORINFO)) };
                 lock (gate)
                 {
@@ -220,10 +266,10 @@ namespace CursorMotionBlur
                         curVisible = true;
                         if (!blankActive) curHandle = ci.hCursor; // keep the real cursor image while it's hidden
 
+                        int n = hist.Count;
+                        bool changed = n == 0 || hist[n - 1].x != ci.pt.x || hist[n - 1].y != ci.pt.y;
                         // crossing to another monitor: drop the trail so it doesn't smear across the gap
-                        int cnt = hist.Count;
-                        bool samePos = cnt > 0 && hist[cnt - 1].x == ci.pt.x && hist[cnt - 1].y == ci.pt.y;
-                        IntPtr mon = samePos ? lastMon : MonitorFromPoint(ci.pt, 2);
+                        IntPtr mon = changed ? MonitorFromPoint(ci.pt, 2) : lastMon;
                         if (mon != lastMon)
                         {
                             hist.Clear(); lastMon = mon;
@@ -234,8 +280,6 @@ namespace CursorMotionBlur
                         }
 
                         long now = sw.ElapsedMilliseconds;
-                        int n = hist.Count;
-                        bool changed = n == 0 || hist[n - 1].x != ci.pt.x || hist[n - 1].y != ci.pt.y;
                         if (changed || now - hist[n - 1].t >= 4)
                             hist.Add(new Sample { x = ci.pt.x, y = ci.pt.y, t = now });
                         if (changed) { lastMove = now; moved.Set(); } // new mouse position -> draw now
@@ -248,24 +292,20 @@ namespace CursorMotionBlur
                         if (!Settings.HideWhenFast) hideWanted = false;
                         else if (dt >= 8)
                         {
-                            double path = 0;
+                            // Hiding looks at the whole trail window (steady). Bringing the cursor back looks at only the last few ms
+                            // (from sample j on), so it returns as soon as the mouse stops or slows, not 30 ms later when the fast part
+                            // has left the window.
+                            int j = hist.Count - 1;
+                            while (j > 0 && now - hist[j - 1].t <= SHOW_WINDOW_MS) j--;
+                            double path = 0, recentPath = 0;
                             for (int i = 1; i < hist.Count; i++)
                             {
-                                double ddx = hist[i].x - hist[i - 1].x, ddy = hist[i].y - hist[i - 1].y;
-                                path += Math.Sqrt(ddx * ddx + ddy * ddy);
+                                double d = Dist(hist[i - 1], hist[i]);
+                                path += d;
+                                if (i > j) recentPath += d;
                             }
                             double speed = path * 1000.0 / dt;
                             double hide = Settings.HideSpeedCm * monPxPerCm; // px/s on the monitor the cursor is on
-                            // Hiding looks at the whole trail window (steady). Bringing the cursor back looks at only the last few ms,
-                            // so it returns as soon as the mouse stops or slows, not 30 ms later when the fast part has left the window.
-                            int j = hist.Count - 1;
-                            while (j > 0 && now - hist[j - 1].t <= SHOW_WINDOW_MS) j--;
-                            double recentPath = 0;
-                            for (int i = j + 1; i < hist.Count; i++)
-                            {
-                                double ddx = hist[i].x - hist[i - 1].x, ddy = hist[i].y - hist[i - 1].y;
-                                recentPath += Math.Sqrt(ddx * ddx + ddy * ddy);
-                            }
                             long recentDt = now - hist[j].t;
                             double recent = recentDt >= 4 ? recentPath * 1000.0 / recentDt : speed;
                             if (speed > hide) { hideWanted = true; lastFast = now; }
@@ -280,15 +320,17 @@ namespace CursorMotionBlur
                 if (idleFor < Settings.TrailMs + 40 || hideWanted)   // never go to sleep while the real cursor is hidden: it has to be given back
                 {
                     if (!timerHigh) { timeBeginPeriod(1); timerHigh = true; }
-                    Thread.Sleep(2); // the mouse reports at ~125 Hz, so 500 Hz sampling is plenty
+                    // look again on every mouse report; the timeout keeps the path ageing after a stop, and every 2 ms while
+                    // the real cursor is hidden so it comes back quickly
+                    mouseWake.WaitOne(hideWanted || !rawInputOk ? 2 : 10);
                 }
                 else
                 {
                     if (timerHigh) { timeEndPeriod(1); timerHigh = false; }
                     if (rawInputOk)
                     {
-                        // sleep until the mouse reports something (the timeout only lets the loop notice that the app is closing)
-                        if (mouseWake.WaitOne(500)) lastMove = sw.ElapsedMilliseconds;
+                        // sleep until the mouse reports something. While an app hides the cursor, just look once per report.
+                        if (mouseWake.WaitOne() && curVisible) lastMove = sw.ElapsedMilliseconds;
                     }
                     else Thread.Sleep(10);                  // no raw input available: fall back to checking every few ms
                 }
@@ -342,7 +384,7 @@ namespace CursorMotionBlur
                     ReloadCursorScheme();
                     blankActive = false;
                 }
-                hideChanged.WaitOne(250);
+                hideChanged.WaitOne();
             }
         }
 
@@ -353,18 +395,18 @@ namespace CursorMotionBlur
             blankActive = false;
         }
 
-        // draw on every new mouse position (the mouse polling rate); the 4 ms timeout keeps the fade going after it stops
         void RenderLoop()
         {
             while (running)
             {
                 // Draw on every new mouse position. The timer (one 120 Hz frame) only carries the fade after the mouse stops: Windows
-                // shows one update per screen refresh, so drawing more often than that is wasted work.
-                bool fresh = moved.WaitOne(shown ? 8 : 250);
+                // shows one update per screen refresh, so drawing more often than that is wasted work. Idle, it only wakes once more
+                // to free the canvas.
+                bool fresh = moved.WaitOne(shown ? 8 : dib != IntPtr.Zero ? 1500 : Timeout.Infinite);
                 long sinceDraw = sw.ElapsedMilliseconds - lastDraw;
                 if (!fresh && !shown)
                 {
-                    if (canvas != null && sinceDraw > 1500) ReleaseCanvas();   // give the memory back while idle
+                    if (dib != IntPtr.Zero && sinceDraw > 1500) ReleaseCanvas();   // give the memory back while idle
                     continue;
                 }
                 if (fresh ? sinceDraw < 3 : sinceDraw < 6) continue;   // just drawn (a very fast mouse reports faster than anyone can see)
@@ -372,47 +414,39 @@ namespace CursorMotionBlur
             }
         }
 
-        // Cursor image scaled to what the system draws on a monitor with this DPI.
-        Sprite GetScaledSprite(IntPtr h, int size)
+        // Cursor picture at the size the system draws it on a monitor (size = the cursor size there; 0 = as the cursor comes).
+        // Resized pictures are made from the original one, so this still works while the real cursor is hidden.
+        Sprite GetSprite(IntPtr h, int size)
         {
-            var bs = GetSprite(h);
-            if (bs == null || size <= 0 || size == bs.bmp.Width) return bs;
             long key = h.ToInt64() * 1000 + size;
             Sprite sp;
-            if (scaled.TryGetValue(key, out sp)) return sp;
-            float f = size / (float)bs.bmp.Width;
-            int nw = (int)Math.Round(bs.bmp.Width * f), nh = (int)Math.Round(bs.bmp.Height * f);
-            var b = new Bitmap(nw, nh, PixelFormat.Format32bppPArgb);
-            using (var g = Graphics.FromImage(b))
+            if (sprites.TryGetValue(key, out sp)) return sp;
+            if (size > 0)
             {
-                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
-                g.DrawImage(bs.bmp, new Rectangle(0, 0, nw, nh), 0, 0, bs.bmp.Width, bs.bmp.Height, GraphicsUnit.Pixel);
+                var bs = GetSprite(h, 0);
+                if (bs == null || size == bs.bmp.Width) return bs;
+                float f = size / (float)bs.bmp.Width;
+                var sb = new Bitmap(size, (int)Math.Round(bs.bmp.Height * f), PixelFormat.Format32bppPArgb);
+                using (var g = Graphics.FromImage(sb))
+                {
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                    g.DrawImage(bs.bmp, new Rectangle(0, 0, sb.Width, sb.Height), 0, 0, bs.bmp.Width, bs.bmp.Height, GraphicsUnit.Pixel);
+                }
+                return sprites[key] = new Sprite(sb, (int)Math.Round(bs.hx * f), (int)Math.Round(bs.hy * f));
             }
-            sp = new Sprite { bmp = b, hx = (int)Math.Round(bs.hx * f), hy = (int)Math.Round(bs.hy * f) };
-            scaled[key] = sp;
-            Log("scaled sprite for handle " + h + " to " + nw + "x" + nh + (blankActive ? " (cursor hidden)" : ""));
-            return sp;
-        }
-
-        Sprite GetSprite(IntPtr h)
-        {
-            Sprite sp;
-            if (sprites.TryGetValue(h, out sp)) return sp;
-            sp = null;
+            if (emptyCursors.Contains(h)) return null;
+            bool hiddenBefore = blankActive, empty = false;
             try
             {
                 ICONINFO ii; GetIconInfo(h, out ii);
                 using (var ic = Icon.FromHandle(h))
+                using (var src = ic.ToBitmap())
                 {
-                    Bitmap b;
-                    using (var src = ic.ToBitmap())
-                    {
-                        b = new Bitmap(src.Width, src.Height, PixelFormat.Format32bppPArgb);
-                        using (var g = Graphics.FromImage(b)) g.DrawImage(src, 0, 0);
-                    }
-                    if (IsBlank(b)) { b.Dispose(); b = null; } // never keep an empty picture (the cursor may be swapped for the invisible one)
-                    if (b != null) sp = new Sprite { bmp = b, hx = ii.xHot, hy = ii.yHot };
+                    var b = new Bitmap(src.Width, src.Height, PixelFormat.Format32bppPArgb);
+                    using (var g = Graphics.FromImage(b)) g.DrawImage(src, 0, 0);
+                    sp = new Sprite(b, ii.xHot, ii.yHot);
+                    if (sp.Empty) { sp.Dispose(); sp = null; empty = true; } // never keep an empty picture (the cursor may be swapped for the invisible one)
                     if (sp != null) Log("sprite for handle " + h + ": " + b.Width + "x" + b.Height + " hotspot " + ii.xHot + "," + ii.yHot);
                 }
                 if (ii.hbmMask != IntPtr.Zero) DeleteObject(ii.hbmMask);
@@ -422,7 +456,10 @@ namespace CursorMotionBlur
             // Only cache a picture taken while the real cursor is showing. Blanking replaces the cursor's content
             // under the same handle, so a picture grabbed during/after the swap could be the blank one.
             if (sp != null && blankActive) { sp.Dispose(); sp = null; }
-            if (sp != null) sprites[h] = sp;
+            if (sp != null) sprites[key] = sp;
+            // Empty while our own blanking was off the whole time: the app itself shows an invisible cursor. Remember that,
+            // so the picture isn't grabbed and checked again every frame.
+            if (empty && !hiddenBefore && !blankActive) emptyCursors.Add(h);
             return sp;
         }
 
@@ -430,19 +467,10 @@ namespace CursorMotionBlur
         // native memory, and rebuild what is needed. Not while the real cursor is hidden: then nothing can be rebuilt.
         void ForgetOldSprites()
         {
-            if (blankActive || (sprites.Count <= MAX_CACHED && scaled.Count <= MAX_CACHED)) return;
-            foreach (var s in sprites.Values) if (s != null) s.Dispose();
-            foreach (var s in scaled.Values) s.Dispose();
-            sprites.Clear(); scaled.Clear();
+            if (blankActive || (sprites.Count <= MAX_CACHED && emptyCursors.Count <= MAX_CACHED)) return;
+            foreach (var s in sprites.Values) s.Dispose();
+            sprites.Clear(); emptyCursors.Clear();
             lastSprite = null; lastGoodHandle = IntPtr.Zero;   // they pointed into the caches
-        }
-
-        static bool IsBlank(Bitmap b)
-        {
-            for (int y = 0; y < b.Height; y++)
-                for (int x = 0; x < b.Width; x++)
-                    if (b.GetPixel(x, y).A != 0) return false;
-            return true;
         }
 
         void HideOverlay()
@@ -454,14 +482,15 @@ namespace CursorMotionBlur
 
         void Render()
         {
-            Sample[] pts;
-            IntPtr handle; int size; bool visible;
+            IntPtr handle; int size, np; bool visible;
             lock (gate)
             {
                 visible = curVisible; handle = curHandle; size = monCursor;
-                pts = hist.ToArray();
+                np = hist.Count;
+                if (pts.Length < np) pts = new Sample[np * 2];
+                hist.CopyTo(pts);   // into one reused array: no garbage per frame
             }
-            if (!visible || pts.Length < 2) { HideOverlay(); return; }
+            if (!visible || np < 2) { HideOverlay(); return; }
             // While the real cursor is hidden, keep drawing with the picture taken before it was.
             ForgetOldSprites();
             bool blank = blankActive;
@@ -469,47 +498,46 @@ namespace CursorMotionBlur
             if (blank)
             {
                 // still scale the last real picture for the monitor the cursor is on now (the cursor may have changed monitors)
-                sp = lastGoodHandle != IntPtr.Zero ? GetScaledSprite(lastGoodHandle, size) : null;
+                sp = lastGoodHandle != IntPtr.Zero ? GetSprite(lastGoodHandle, size) : null;
                 if (sp == null) sp = lastSprite;
             }
             else
             {
-                sp = GetScaledSprite(handle, size);
+                if (emptyCursors.Contains(handle)) { HideOverlay(); return; }   // the app hid its cursor: don't blur the previous one
+                sp = GetSprite(handle, size);
                 if (sp != null) { lastSprite = sp; lastGoodHandle = handle; } else sp = lastSprite;
             }
             if (sp == null) { Log("no sprite for cursor handle " + handle); HideOverlay(); return; }
 
             long now = sw.ElapsedMilliseconds;
-            var last = pts[pts.Length - 1];
+            var last = pts[np - 1];
             int trailMs = Settings.TrailMs;
             int strength = Settings.Strength;
 
             // stationary? nothing to blur
             bool anyMove = false;
-            for (int i = 0; i < pts.Length; i++) if (pts[i].x != last.x || pts[i].y != last.y) { anyMove = true; break; }
+            for (int i = 0; i < np; i++) if (pts[i].x != last.x || pts[i].y != last.y) { anyMove = true; break; }
             if (!anyMove) { HideOverlay(); return; }
 
             int minX = int.MaxValue, minY = int.MaxValue, maxX = int.MinValue, maxY = int.MinValue;
-            foreach (var s in pts)
+            for (int i = 0; i < np; i++)
             {
+                var s = pts[i];
                 minX = Math.Min(minX, s.x - sp.hx); minY = Math.Min(minY, s.y - sp.hy);
-                maxX = Math.Max(maxX, s.x - sp.hx + sp.bmp.Width); maxY = Math.Max(maxY, s.y - sp.hy + sp.bmp.Height);
+                maxX = Math.Max(maxX, s.x - sp.hx + sp.w); maxY = Math.Max(maxY, s.y - sp.hy + sp.h);
             }
             int w = maxX - minX, h = maxY - minY;
 
             double total = 0;
-            for (int i = 1; i < pts.Length; i++)
-                total += Math.Sqrt(Math.Pow(pts[i].x - pts[i - 1].x, 2) + Math.Pow(pts[i].y - pts[i - 1].y, 2));
-            double step = Math.Max(1.0, total / MAX_COPIES);
+            for (int i = 1; i < np; i++)
+                total += Dist(pts[i - 1], pts[i]);
+            double step = Math.Max(1.0, total / Settings.MaxCopies);   // dense, faint copies read as a smooth blur rather than separate ghosts
             double cover = COVER_PX * size / 32.0;
             double peak = strength / 100.0;
 
             EnsureCanvas(w, h);
-            var g = canvasG;
-            g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
-            g.FillRectangle(Brushes.Transparent, 0, 0, w, h);
-            g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceOver;
-            for (int i = 1; i < pts.Length; i++)
+            unsafe { for (int r = 0; r < h; r++) { uint* row = (uint*)bits + r * canvasW; for (int c = 0; c < w; c++) row[c] = 0; } }
+            for (int i = 1; i < np; i++)
             {
                 var a = pts[i - 1]; var b = pts[i];
                 double ddx = b.x - a.x, ddy = b.y - a.y;
@@ -527,7 +555,8 @@ namespace CursorMotionBlur
                     // copies overlap by about cover/step, so each one gets that share of the opacity the user asked for
                     int ai = (int)Math.Round(Math.Min(1.0, peak * life * step / cover) * 255);
                     if (ai <= 0) continue;
-                    g.DrawImageUnscaled(Level(sp, ai), (int)Math.Round(x) - sp.hx - minX, (int)Math.Round(y) - sp.hy - minY);
+                    int ox = (int)Math.Round(x) - sp.hx - minX, oy = (int)Math.Round(y) - sp.hy - minY;
+                    if (ox >= 0 && oy >= 0 && ox + sp.w <= w && oy + sp.h <= h) Blend(sp, ai, ox, oy);
                 }
             }
 
@@ -545,44 +574,44 @@ namespace CursorMotionBlur
             }
         }
 
-        Bitmap Level(Sprite sp, int a)
+        // Draws the cursor picture at (ox, oy) on the canvas at opacity a (1-255): premultiplied "source over", two colour
+        // channels per multiplication. Done by hand because a graphics call per copy costs far more than the copy itself.
+        unsafe void Blend(Sprite sp, int a, int ox, int oy)
         {
-            var b = sp.lv[a];
-            if (b != null) return b;
-            b = new Bitmap(sp.bmp.Width, sp.bmp.Height, PixelFormat.Format32bppPArgb);
-            using (var g = Graphics.FromImage(b))
-                g.DrawImage(sp.bmp, new Rectangle(0, 0, b.Width, b.Height), 0, 0, b.Width, b.Height, GraphicsUnit.Pixel, attrs[a]);
-            sp.lv[a] = b;
-            return b;
+            uint k = (uint)a + 1;   // 2-256, so full opacity is exact
+            for (int y = 0; y < sp.h; y++)
+            {
+                uint* row = (uint*)bits + (oy + y) * canvasW + ox;
+                int i = y * sp.w;
+                for (int x = 0; x < sp.w; x++)
+                {
+                    uint s = sp.px[i + x];
+                    if (s == 0) continue;
+                    s = (((s & 0xFF00FF) * k >> 8) & 0xFF00FF) | (((s >> 8) & 0xFF00FF) * k & 0xFF00FF00);
+                    uint inv = 256 - (s >> 24), d = row[x];
+                    row[x] = s + ((((d & 0xFF00FF) * inv >> 8) & 0xFF00FF) | (((d >> 8) & 0xFF00FF) * inv & 0xFF00FF00));
+                }
+            }
         }
 
         // The canvas only ever grows (in 128 px steps); frames draw into its top-left w x h corner.
         void ReleaseCanvas()
         {
-            if (canvasG != null) { canvasG.Dispose(); canvasG = null; }
-            if (canvas != null) { canvas.Dispose(); canvas = null; }
             if (dib != IntPtr.Zero) { SelectObject(memDc, dibOld); DeleteObject(dib); dib = IntPtr.Zero; }
             canvasW = canvasH = 0;
         }
 
         void EnsureCanvas(int w, int h)
         {
-            if (canvas != null && w <= canvasW && h <= canvasH) return;
+            if (dib != IntPtr.Zero && w <= canvasW && h <= canvasH) return;
             int nw = Math.Max(canvasW, (w + 127) / 128 * 128), nh = Math.Max(canvasH, (h + 127) / 128 * 128);
 
             if (screenDc == IntPtr.Zero) { screenDc = GetDC(IntPtr.Zero); memDc = CreateCompatibleDC(screenDc); }
             ReleaseCanvas();
 
             var bi = new BITMAPINFOHEADER { biSize = Marshal.SizeOf(typeof(BITMAPINFOHEADER)), biWidth = nw, biHeight = -nh, biPlanes = 1, biBitCount = 32 };
-            IntPtr bits;
             dib = CreateDIBSection(screenDc, ref bi, 0, out bits, IntPtr.Zero, 0);
             dibOld = SelectObject(memDc, dib);
-            canvas = new Bitmap(nw, nh, nw * 4, PixelFormat.Format32bppPArgb, bits);
-            canvasG = Graphics.FromImage(canvas);
-            canvasG.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighSpeed;
-            canvasG.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
-            canvasG.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
-            canvasG.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.None;
             canvasW = nw; canvasH = nh;
         }
     }

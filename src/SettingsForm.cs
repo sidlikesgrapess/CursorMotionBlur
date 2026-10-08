@@ -40,7 +40,23 @@ namespace CursorMotionBlur
         CheckBox chkEnabled, chkHide, chkStartup;
         TrackBar barStrength, barTrail, barSpeed;
         Label lblStrength, lblTrail, lblSpeed, lblUpdate;
-        Button btnUpdate;
+        Button btnUpdate, btnHotkey;
+        CheckBox chkPause;
+        ComboBox cmbQuality;
+        Label lblHelp;
+        ToolTip tip;
+        bool capturing;                // waiting for the new shortcut to be pressed
+        static readonly string QualityHelp = string.Join(Environment.NewLine, new[]
+        {
+            "Quality sets the most cursor copies drawn along the trail in one frame.",
+            "Higher = a smoother streak in very fast movement, but more CPU.",
+            "",
+            "Fast: up to 35 copies (lightest)",
+            "Balanced: up to 70 (recommended)",
+            "Smooth: up to 100",
+            "",
+            "At slow and normal speeds all three look the same."
+        });
         string updateMsg, updateUrl;   // result of the last update check
         bool checking;
 
@@ -52,6 +68,7 @@ namespace CursorMotionBlur
             MinimizeBox = false;
             ShowInTaskbar = true;
             AutoScaleMode = AutoScaleMode.None;           // we do the scaling ourselves
+            KeyPreview = true;                            // lets the window see the keys pressed while a new shortcut is being picked
             AutoSize = false;                             // sized explicitly in FitToContent (see there)
             StartPosition = FormStartPosition.Manual;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
@@ -134,11 +151,36 @@ namespace CursorMotionBlur
             table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, P(150)));
             Controls.Add(table);
 
-            chkEnabled = AddCheck("Enable motion blur  (Ctrl+Alt+B)");
+            chkEnabled = AddCheck("Enable motion blur");
+
+            // shortcut: label left, button right (click it, then press the new keys)
+            var lblHot = new Label { Text = "Toggle hotkey", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, P(8), 0, 0) };
+            btnHotkey = new Button { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Right, Margin = new Padding(0, P(6), 0, 0), Padding = new Padding(P(6), P(2), P(6), P(2)) };
+            btnHotkey.Click += delegate { capturing = true; btnHotkey.Text = "Press new keys..."; };
+            btnHotkey.LostFocus += delegate { if (capturing) { capturing = false; ShowHotkey(); } };
+            table.Controls.Add(lblHot);
+            table.Controls.Add(btnHotkey);
+
             barStrength = AddSlider(1, 100, 10, out lblStrength);
             barTrail = AddSlider(10, 150, 10, out lblTrail);
             chkHide = AddCheck("Hide the real cursor when moving very fast");
             barSpeed = AddSlider(20, 300, 20, out lblSpeed);
+            chkPause = AddCheck("Pause in fullscreen apps and games");
+
+            // quality: "Quality ?" on the left (hover or click the ? for what it does), the choice on the right
+            var qualityLabel = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, FlowDirection = FlowDirection.LeftToRight, Anchor = AnchorStyles.Left, Margin = new Padding(0, P(8), 0, 0) };
+            qualityLabel.Controls.Add(new Label { Text = "Quality", AutoSize = true, Margin = new Padding(0, 0, P(5), 0) });
+            lblHelp = new Label { Text = "?", AutoSize = true, Cursor = Cursors.Hand, ForeColor = SystemColors.Highlight, Margin = new Padding(0) };
+            if (tip != null) tip.Dispose();
+            tip = new ToolTip { AutoPopDelay = 30000, InitialDelay = 150, ReshowDelay = 100 };
+            tip.SetToolTip(lblHelp, QualityHelp);
+            lblHelp.Click += delegate { tip.Show(QualityHelp, lblHelp, 0, lblHelp.Height + P(2), 15000); };
+            qualityLabel.Controls.Add(lblHelp);
+            cmbQuality = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = P(120), Anchor = AnchorStyles.Right, Margin = new Padding(0, P(6), 0, P(4)) };
+            cmbQuality.Items.AddRange(new object[] { "Fast", "Balanced", "Smooth" });
+            table.Controls.Add(qualityLabel);
+            table.Controls.Add(cmbQuality);
+
             chkStartup = AddCheck("Launch CursorMotionBlur when Windows starts");
 
             // version + manual update check (one row: status on the left, button on the right)
@@ -163,6 +205,8 @@ namespace CursorMotionBlur
 
             chkEnabled.CheckedChanged += delegate { if (!loading) { Settings.Enabled = chkEnabled.Checked; Settings.Save(); } };
             chkHide.CheckedChanged += delegate { if (!loading) { Settings.HideWhenFast = chkHide.Checked; barSpeed.Enabled = chkHide.Checked; Settings.Save(); } };
+            chkPause.CheckedChanged += delegate { if (!loading) { Settings.PauseInFullscreen = chkPause.Checked; Settings.Save(); } };
+            cmbQuality.SelectedIndexChanged += delegate { if (!loading) { Settings.Quality = cmbQuality.SelectedIndex; Settings.Save(); } };
             chkStartup.CheckedChanged += delegate { if (!loading) Settings.StartWithWindows = chkStartup.Checked; };
             barStrength.ValueChanged += delegate { if (!loading) { Settings.Strength = barStrength.Value; Settings.Save(); } UpdateLabels(); };
             barTrail.ValueChanged += delegate { if (!loading) { Settings.TrailMs = barTrail.Value; Settings.Save(); } UpdateLabels(); };
@@ -200,12 +244,45 @@ namespace CursorMotionBlur
             chkEnabled.Checked = Settings.Enabled;
             chkHide.Checked = Settings.HideWhenFast;
             chkStartup.Checked = Settings.StartWithWindows;
+            chkPause.Checked = Settings.PauseInFullscreen;
+            cmbQuality.SelectedIndex = Math.Max(0, Math.Min(2, Settings.Quality));
+            ShowHotkey();
             barStrength.Value = Settings.Strength;
             barTrail.Value = Settings.TrailMs;
             barSpeed.Value = Math.Max(barSpeed.Minimum, Math.Min(barSpeed.Maximum, Settings.HideSpeedCm));
             barSpeed.Enabled = chkHide.Checked;
             loading = false;
             UpdateLabels();
+        }
+
+        void ShowHotkey()
+        {
+            btnHotkey.Text = Settings.HotkeyText(Settings.HotkeyMods, Settings.HotkeyKey);
+        }
+
+        // While a new shortcut is being picked, the next key combination becomes the shortcut (Esc cancels).
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            if (!capturing) { base.OnKeyDown(e); return; }
+            e.Handled = true; e.SuppressKeyPress = true;
+            Keys k = e.KeyCode;
+            if (k == Keys.Escape) { capturing = false; ShowHotkey(); return; }
+            if (k == Keys.ControlKey || k == Keys.Menu || k == Keys.ShiftKey || k == Keys.LWin || k == Keys.RWin) return;   // wait for the real key
+            uint mods = (e.Control ? 0x2u : 0u) | (e.Alt ? 0x1u : 0u) | (e.Shift ? 0x4u : 0u);
+            if (mods == 0) return;   // a shortcut without Ctrl, Alt or Shift would fire while typing in any program
+
+            uint oldMods = Settings.HotkeyMods, oldKey = Settings.HotkeyKey;
+            Settings.HotkeyMods = mods; Settings.HotkeyKey = (uint)k;
+            capturing = false;
+            if (!Settings.ApplyHotkey())
+            {
+                Settings.HotkeyMods = oldMods; Settings.HotkeyKey = oldKey; Settings.ApplyHotkey();   // keep the old one working
+                ShowHotkey();
+                MessageBox.Show(this, "That shortcut is already used by another program. Please pick a different one.", AppInfo.Title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            Settings.Save();
+            ShowHotkey();
         }
 
         void CheckForUpdates()
@@ -237,7 +314,7 @@ namespace CursorMotionBlur
 
         void UpdateLabels()
         {
-            lblStrength.Text = "Blur strength: " + barStrength.Value + "%";
+            lblStrength.Text = "Trail opacity: " + barStrength.Value + "%";
             lblTrail.Text = "Trail length: " + barTrail.Value + " ms";
             lblSpeed.Text = "Hide above speed: " + barSpeed.Value + " cm/s on screen";
         }
