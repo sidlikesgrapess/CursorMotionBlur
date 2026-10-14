@@ -3,7 +3,7 @@
 Measured 2026-10-14 on the mod running in Windhawk (1.1 plus the shell-hook change), with default
 settings and "Hide the real cursor when moving very fast" on.
 
-**Setup:** laptop screen 2880×1800 at 200% scaling (64 px blur copies), pointer size 1, 12 logical
+**Setup:** Intel Core 5 210H laptop, screen 2880×1800 at 200% scaling (64 px blur copies), pointer size 1, 12 logical
 CPUs. The mouse moved in circles of 400 px radius for 6 s per speed, with input injected at about
 125 reports per second. "% of whole CPU" is out of all 12 logical CPUs; "% of one core" is the same
 time out of a single CPU.

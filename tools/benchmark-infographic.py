@@ -47,7 +47,7 @@ fig.legend(handles=[Patch(color=OLD, label='Version 1.0'), Patch(color=NEW, labe
            bbox_to_anchor=(0.97, 0.955), ncol=2, frameon=False, fontsize=16, handlelength=1.4, handleheight=1.0,
            columnspacing=1.8)
 
-fig.text(0.04, 0.075, 'Measured on a 2880×1800 laptop screen at 200% scaling and 120 Hz, about 125 mouse reports per second, '
+fig.text(0.04, 0.075, 'Measured on an Intel Core 5 210H laptop, 2880×1800 screen at 200% scaling and 120 Hz, about 125 mouse reports per second, '
          'opacity 92, trail 30 ms, hiding on; 1.1 with "Minimum blur speed" at 10 cm/s.', fontsize=10.5, color=MUTED)
 fig.text(0.04, 0.04, 'Full data: github.com/sidlikesgrapess/CursorMotionBlur/blob/main/windhawk/BENCHMARKS.md',
          fontsize=10.5, color=MUTED)
