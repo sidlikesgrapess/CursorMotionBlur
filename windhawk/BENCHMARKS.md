@@ -67,3 +67,28 @@ Two runs, CPU as % of all 12 logical CPUs; "private" is the mod process's commit
 - The working set includes shared DLL pages (windhawk.exe and system DLLs); the private figure is the mod's own
   memory. It grows by ~1 MB while moving (the drawing canvas) and is given back after 1.5 s idle.
 - Script: `tools/speedcpu.py`, extended with explorer.exe and memory columns.
+
+## 1.1 vs 1.0 (2026-10-14, 120 Hz)
+
+Each version installed in Windhawk in turn, same settings (opacity 92, trail 30 ms, hiding on); 1.1 with
+"Draw above speed" at 10 cm/s (about 960 px/s on this screen). Circles of 400 px radius, about 125 mouse reports
+per second, 6 s per speed. CPU as % of all 12 logical CPUs; "blur on" is how often the blur window was showing.
+
+| Speed | Mod 1.0 | Mod 1.1 | Blur on 1.0 | Blur on 1.1 | explorer 1.0 | explorer 1.1 | dwm 1.0 | dwm 1.1 | Private RAM 1.0 | Private RAM 1.1 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Still | 0.00% | 0.00% | 0% | 0% | 0.74% | 0.82% | 0.43% | 0.28% | 2.1 MB | 2.0 MB |
+| 2 cm/s | 0.98% | 0.15% | 98% | 0% | 0.85% | 0.78% | 3.84% | 0.78% | 2.3 MB | 2.0 MB |
+| 4 cm/s | 0.82% | 0.17% | 99% | 0% | 0.91% | 0.76% | 3.90% | 0.56% | 2.6 MB | 2.0 MB |
+| 8 cm/s | 1.24% | 0.37% | 99% | 22%* | 0.91% | 0.72% | 4.05% | 1.41% | 2.8 MB | 2.0 MB |
+| 12 cm/s | 0.91% | 1.17% | 99% | 98% | 0.87% | 0.95% | 3.97% | 4.34% | 3.1 MB | 2.5 MB |
+| 40 cm/s | 1.73% | 1.41% | 99% | 99% | 0.46% | 1.17% | 4.10% | 4.36% | 3.1 MB | 2.5 MB |
+| 80 cm/s | 1.91% | 1.56% | 99% | 99% | 0.87% | 1.09% | 3.77% | 4.73% | 3.1 MB | 3.0 MB |
+
+\* The test jumps the pointer 400 px to the circle's edge before each speed; that jump turns the blur on, and it
+stays on above half the draw speed (5 cm/s) until the speed dips below it. Starting at 8 cm/s from rest draws nothing.
+
+- Below the draw speed, 1.1's remaining CPU is mostly Windows delivering the mouse reports: a program that only
+  listens to raw mouse input measured the same (0.11-0.15%).
+- explorer.exe owns 1.1's window above the Start menu, which adds about 0.2-0.3% there while drawing.
+
+![1.1 vs 1.0](../assets/benchmark-1.1.png)
