@@ -1,3 +1,4 @@
+import os
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -51,5 +52,5 @@ fig.text(0.04, 0.075, 'Measured on an Intel Core 5 210H laptop, 2880×1800 scree
          'opacity 92, trail 30 ms, hiding on; 1.1 with "Minimum blur speed" at 10 cm/s.', fontsize=10.5, color=MUTED)
 fig.text(0.04, 0.04, 'Full data: github.com/sidlikesgrapess/CursorMotionBlur/blob/main/windhawk/BENCHMARKS.md',
          fontsize=10.5, color=MUTED)
-fig.savefig(r'C:\Users\Siddartha\CursorMotionBlur\assets\benchmark-1.1.png', facecolor=SURF)
+fig.savefig(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'assets', 'benchmark-1.1.png'), facecolor=SURF)
 print('saved')

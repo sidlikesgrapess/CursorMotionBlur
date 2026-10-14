@@ -25,7 +25,8 @@ extern "C" {
 typedef struct
 {
     BOOL enabled;
-    int  strength;          // 1-100: opacity of the blur right behind the pointer, in %
+    int  opacity;           // 1-100: how solid the blur is right behind the pointer, in %
+    int  drawSpeedCm;       // 0-50: pointer speed below which no blur is drawn, in cm/s on the main monitor (0: any speed)
     int  trailMs;           // 10-150: how far back in time the blur reaches
     BOOL hideWhenFast;      // swap the real cursor for an invisible one while moving very fast
     int  hideSpeedCm;       // 20-300: pointer speed above which it is hidden, in cm/s on the main monitor (same hand speed everywhere)
@@ -48,8 +49,11 @@ void Log(const char *fmt, ...);         // %TEMP%\CursorMotionBlur.log, only whe
 
 // ---- engine (engine.c) ----
 void Engine_Start(void);
-void Engine_Wake(void);                 // a mouse report arrived, or the settings changed
-void Engine_RestoreCursors(void);       // put the real cursors back (exit, crash)
+void Engine_Wake(void);                 // a mouse report arrived
+void Engine_Recheck(void);              // settings or the window in front changed: look at the front window now
+void Engine_Stop(void);                 // exit: stop the threads and put the real cursors back
+void Engine_RestoreCursors(void);       // put the real cursors back (Windows ending the session)
+void Engine_CrashRestore(void);         // the same from the crash handler (leaves the crash-recovery flag set)
 void Engine_DisplayChanged(void);       // monitors, scaling or cursor scheme changed
 #define WM_APP_PAUSED (WM_APP + 2)      // engine -> main window: wParam = paused for a fullscreen app
 
@@ -58,7 +62,7 @@ typedef struct { int w, h, hx, hy, id; UINT32 *px; } Sprite;   // cursor picture
 typedef struct { int x, y; float a; } Copy;                     // one copy: top-left (relative to the frame box), opacity 0-1
 
 #define MAX_COPIES 100      // the most copies spread along the trail in one frame
-#define COPY_BUF   512      // room for the copies of one frame (short segments add one each)
+#define COPY_BUF   612      // room for the copies of one frame: MAX_COPIES, plus one for each of the 511 segments of a full path
 
 // Draws n copies of sp, each resized to sw x sh, into the box (x, y, w, h) in screen pixels, and shows it.
 BOOL R_Draw(const Sprite *sp, int sw, int sh, const Copy *c, int n, int x, int y, int w, int h);   // FALSE: could not draw

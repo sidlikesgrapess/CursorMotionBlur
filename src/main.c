@@ -10,13 +10,13 @@
 #define WM_TRAY   (WM_APP + 1)
 #define HOTKEY_ID 1
 
-static const Settings defaults = { TRUE, 92, 30, TRUE, 40, TRUE, MOD_CONTROL | MOD_ALT, 'B' };
+static const Settings defaults = { TRUE, 50, 29, 25, TRUE, 30, TRUE, MOD_CONTROL | MOD_ALT, 'B' };
 Settings g_set;
 HWND g_main;
 volatile BOOL g_rawInput;
 static BOOL paused;   // a fullscreen app or game is in front
 static NOTIFYICONDATAW nid;
-static UINT msgTaskbarCreated;
+static UINT msgTaskbarCreated, msgShellHook;
 static const WCHAR runKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 
 // ---- settings file: %APPDATA%\CursorMotionBlur\settings.ini, Key=Value lines (same file as the earlier .NET versions) ----
@@ -46,7 +46,8 @@ static BOOL Settings_Load(void)   // FALSE if there is no file yet
         BOOL b = _strnicmp(v, "true", 4) == 0;
         int n = atoi(v);
         if      (!strcmp(line, "Enabled"))           g_set.enabled = b;
-        else if (!strcmp(line, "Strength"))          g_set.strength = Clamp(n, 1, 100);
+        else if (!strcmp(line, "TrailOpacity"))      g_set.opacity = Clamp(n, 1, 100);   // not v2.0.0's "Strength": it means something else now
+        else if (!strcmp(line, "DrawSpeedCm"))       g_set.drawSpeedCm = Clamp(n, 0, 50);
         else if (!strcmp(line, "TrailMs"))           g_set.trailMs = Clamp(n, 10, 150);
         else if (!strcmp(line, "HideWhenFast"))      g_set.hideWhenFast = b;
         else if (!strcmp(line, "HideSpeedCm"))       g_set.hideSpeedCm = Clamp(n, 20, 300);
@@ -65,11 +66,12 @@ void Settings_Save(void)
     FILE *f = _wfopen(path, L"w");
     if (!f) return;
 #define B(x) ((x) ? "True" : "False")
-    fprintf(f, "Enabled=%s\nStrength=%d\nTrailMs=%d\nHideWhenFast=%s\nHideSpeedCm=%d\nPauseInFullscreen=%s\nHotkeyMods=%u\nHotkeyKey=%u\n",
-            B(g_set.enabled), g_set.strength, g_set.trailMs, B(g_set.hideWhenFast), g_set.hideSpeedCm, B(g_set.pauseFullscreen),
+    fprintf(f, "Enabled=%s\nTrailOpacity=%d\nDrawSpeedCm=%d\nTrailMs=%d\nHideWhenFast=%s\nHideSpeedCm=%d\nPauseInFullscreen=%s\nHotkeyMods=%u\nHotkeyKey=%u\n",
+            B(g_set.enabled), g_set.opacity, g_set.drawSpeedCm, g_set.trailMs, B(g_set.hideWhenFast), g_set.hideSpeedCm, B(g_set.pauseFullscreen),
             g_set.hotMods, g_set.hotKey);
 #undef B
     fclose(f);
+    Engine_Recheck();   // the pause setting may have changed: look at the front window again
 }
 
 void Settings_Reset(void)   // everything except on/off
@@ -160,7 +162,7 @@ void App_SetEnabled(BOOL on)
     ListenToMouse();
     Tray(NIM_MODIFY);
     UI_Refresh();
-    Engine_Wake();
+    Engine_Recheck();
 }
 
 static void TrayMenu(void)
@@ -182,9 +184,20 @@ static void TrayMenu(void)
 
 static LRESULT CALLBACK MainProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
+    // Another window was activated (the high bit marks a fullscreen one): the engine looks at the window in front. An administrator
+    // window's activation arrives here too, though Windows sends this app no mouse input while it is in front.
+    if (msg == msgShellHook && msg && (wp & 0x7FFF) == HSHELL_WINDOWACTIVATED) { Engine_Recheck(); return 0; }
     switch (msg)
     {
-    case WM_INPUT:  Engine_Wake(); break;   // then DefWindowProc, which frees the input data
+    case WM_INPUT:   // wake the engine for movement only (not for wheel or button reports); then DefWindowProc frees the input data
+    {
+        RAWINPUT ri;
+        UINT size = sizeof ri;
+        if (GetRawInputData((HRAWINPUT)lp, RID_INPUT, &ri, &size, sizeof(RAWINPUTHEADER)) != (UINT)-1 && ri.header.dwType == RIM_TYPEMOUSE &&
+            (ri.data.mouse.lLastX || ri.data.mouse.lLastY || (ri.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)))
+            Engine_Wake();
+        break;
+    }
     case WM_HOTKEY: if (wp == HOTKEY_ID) App_SetEnabled(!g_set.enabled); return 0;
     case WM_TRAY:
         if (lp == WM_RBUTTONUP) TrayMenu();
@@ -193,14 +206,14 @@ static LRESULT CALLBACK MainProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_APP_PAUSED: paused = (BOOL)wp; ListenToMouse(); return 0;
     case WM_SETTINGCHANGE: case WM_DISPLAYCHANGE: Engine_DisplayChanged(); break;
     case WM_ENDSESSION: Engine_RestoreCursors(); return 0;
-    case WM_DESTROY: PostQuitMessage(0); return 0;
+    case WM_DESTROY: DeregisterShellHookWindow(h); PostQuitMessage(0); return 0;
     default:
         if (msg == msgTaskbarCreated) Tray(NIM_ADD);   // Explorer restarted: put the icon back
     }
     return DefWindowProcW(h, msg, wp, lp);
 }
 
-static LONG WINAPI Crash(EXCEPTION_POINTERS *e) { (void)e; Engine_RestoreCursors(); return EXCEPTION_CONTINUE_SEARCH; }
+static LONG WINAPI Crash(EXCEPTION_POINTERS *e) { (void)e; Engine_CrashRestore(); return EXCEPTION_CONTINUE_SEARCH; }
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdLine, int show)
 {
@@ -211,7 +224,6 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdLine, int show)
     g_set = defaults;
     BOOL firstRun = !Settings_Load();
     if (firstRun) Settings_Save();   // so the settings window only opens by itself once
-    SystemParametersInfoW(SPI_SETCURSORS, 0, NULL, 0);   // undo a blank cursor left behind by a crashed earlier run
     SetUnhandledExceptionFilter(Crash);
 
     WNDCLASSW wc = { 0 };
@@ -221,6 +233,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdLine, int show)
     RegisterClassW(&wc);
     g_main = CreateWindowExW(0, wc.lpszClassName, APP_NAME, WS_POPUP, 0, 0, 0, 0, NULL, NULL, inst, NULL);
     msgTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
+    msgShellHook = RegisterWindowMessageW(L"SHELLHOOK");
+    if (!RegisterShellHookWindow(g_main)) Log("RegisterShellHookWindow failed");
 
     App_ApplyHotkey();
     ListenToMouse();
@@ -235,7 +249,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmdLine, int show)
         TranslateMessage(&m);
         DispatchMessageW(&m);
     }
-    Engine_RestoreCursors();
+    Engine_Stop();
     Shell_NotifyIconW(NIM_DELETE, &nid);
     return 0;
 }

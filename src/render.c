@@ -13,6 +13,7 @@ static int canvasW, canvasH;
 static UINT32 *pic;             // the cursor picture at the drawn size
 static int *span;               // per row of pic: first and one-past-last visible pixel (most of a cursor is transparent)
 static int picId, picW, picH;
+static BOOL visible;            // the overlay window is shown
 
 static void CreateOverlay(void)
 {
@@ -41,6 +42,7 @@ static void EnsureCanvas(int w, int h)   // grows only, in 128 px steps
     ReleaseCanvas();
     BITMAPINFO bi = { { sizeof(BITMAPINFOHEADER), nw, -nh, 1, 32 } };
     dib = CreateDIBSection(memDc, &bi, DIB_RGB_COLORS, (void **)&bits, NULL, 0);
+    if (!dib) return;
     dibOld = SelectObject(memDc, dib);
     canvasW = nw; canvasH = nh;
 }
@@ -77,11 +79,12 @@ static UINT32 Pixel(const Sprite *sp, int x, int y, int w, int h)
 }
 
 // The cursor picture at the drawn size, made again only when the cursor or the size changes.
-static void Resize(const Sprite *sp, int w, int h)
+static BOOL Resize(const Sprite *sp, int w, int h)
 {
-    if (pic && picId == sp->id && picW == w && picH == h) return;
+    if (pic && picId == sp->id && picW == w && picH == h) return TRUE;
     free(pic);
     pic = malloc(w * h * 4 + h * 2 * sizeof(int));
+    if (!pic) return FALSE;
     span = (int *)(pic + w * h);
     picId = sp->id; picW = w; picH = h;
     for (int y = 0; y < h; y++)
@@ -93,6 +96,7 @@ static void Resize(const Sprite *sp, int w, int h)
         while (b > a && !pic[y * w + b - 1]) b--;
         span[2 * y] = a; span[2 * y + 1] = b;
     }
+    return TRUE;
 }
 
 // Draws the picture at (ox, oy) on the canvas at opacity a (1-255): premultiplied "source over", two channels per multiplication.
@@ -118,9 +122,9 @@ BOOL R_Draw(const Sprite *sp, int sw, int sh, const Copy *c, int n, int x, int y
 {
     if (!wnd) CreateOverlay();
     if (!wnd || !memDc) return FALSE;
-    Resize(sp, sw, sh);
+    if (!Resize(sp, sw, sh)) return FALSE;
     EnsureCanvas(w, h);
-    if (!dib || !pic) return FALSE;
+    if (!dib) return FALSE;
     for (int r = 0; r < h; r++) memset(bits + r * canvasW, 0, w * 4);
     for (int i = 0; i < n; i++)
     {
@@ -132,12 +136,16 @@ BOOL R_Draw(const Sprite *sp, int sw, int sh, const Copy *c, int n, int x, int y
     POINT dst = { x, y }, src = { 0, 0 };
     SIZE size = { w, h };
     BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
-    UpdateLayeredWindow(wnd, NULL, &dst, &size, memDc, &src, 0, &bf, ULW_ALPHA);
-    if (!IsWindowVisible(wnd)) SetWindowPos(wnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    if (!UpdateLayeredWindow(wnd, NULL, &dst, &size, memDc, &src, 0, &bf, ULW_ALPHA)) return FALSE;
+    if (!visible)
+    {
+        SetWindowPos(wnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        visible = TRUE;
+    }
     return TRUE;
 }
 
-void R_Hide(void) { if (wnd) ShowWindow(wnd, SW_HIDE); }
+void R_Hide(void) { if (wnd) ShowWindow(wnd, SW_HIDE); visible = FALSE; }
 
 void R_Trim(void)
 {

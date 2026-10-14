@@ -1,72 +1,58 @@
 # CursorMotionBlur
 
-A tiny Windows tray app that adds a **live motion blur to your mouse cursor**, system-wide, like macOS.
+A tiny, portable Windows tray app that adds a **live motion blur to your mouse cursor**, system-wide, like macOS.
 
-![Demo: a real screen recording of the cursor leaving a smooth blur trail that grows with speed, and the real cursor disappearing on very fast flicks](assets/demo.gif)
+![Demo: the cursor leaving a smooth blur trail that grows with speed, and the real cursor disappearing on very fast flicks](assets/demo.gif)
 
-*Recorded off a real screen on a 120 Hz monitor, with trail opacity 90% and a 30 ms trail, which is about what the defaults are now (everything is adjustable live in Settings). A GIF tops out at 50 fps, so here is the [smoother 120 fps video](assets/demo-120fps.mp4).*
 
-- Fading blur trail behind the cursor, drawn in real time as the mouse moves (up to your monitor's refresh rate)
-- Optionally hides the real cursor when you move very fast, so only the blur remains
-- Works across multiple monitors with different resolutions and display scaling
-- Lightweight: a single ~60 KB `.exe` written in C (nothing else to download or keep next to it, no installer, no runtime). About 1.5 MB of memory, no CPU at all while the mouse is still, and well under 1% of the whole CPU while it moves
+> # The blur CAN NOT show above the Start menu!!!!
+> **Start menu,nottification center etc. sit on a higher layer** I would have to get a signed cetificate (costs money) or use some hacky method to make this work. 1. Im lazy. 2. Its risky + I wouldnt trust a random guy on the internet just for a mouse effect  
+> Still want it? Use the **Pointer Afterimage Motion Blur** mod for [windhawk](https://windhawk.net/mods/pointer-afterimage-motion-blur) instead. It can draw above them. Don't run both at once, they fight over the cursors.
 
-## Use it
 
-1. Download `CursorMotionBlur.exe` from the [Releases](../../releases) page and run it.
-2. A settings window opens on first run. Everything applies instantly, so tune it by moving the mouse.
-3. It lives in the system tray. Right-click the icon for **Enabled / Settings / Exit**, or press **Ctrl+Alt+B** anywhere to toggle it (you can change this shortcut in Settings).
+
+## Using it
+
+1. Grab `CursorMotionBlur.exe` from [Releases](../../releases) and run it.
+2. A settings window opens (check tray if it doesnt).
+3. It lives in the tray after closing. Right-click for **Enabled / Settings / Exit**, or hit **Ctrl+Alt+B** to toggle (changeable in Settings).
 
 | Setting | What it does |
 | --- | --- |
-| Trail opacity | How solid the blur is right behind the pointer (1-100%); it fades to nothing at the far end of the trail |
+| Trail opacity | How solid the blur is right behind the pointer (1-100%) |
+| Minimum blur speed | No blur below this pointer speed, in cm/s on your main monitor (0-50, 0 = always blur) |
 | Trail length | How far back in time the blur reaches (10-150 ms) |
-| Hide the real cursor when moving very fast | Swaps the system cursors for an invisible one above the chosen speed, then restores them. The speed is set in cm/s as measured on your main monitor, and it is the same mouse speed on every monitor, so the cursor hides at the same hand speed wherever it is |
-| Toggle hotkey | The global on/off shortcut (default Ctrl+Alt+B). Click the button, then press the new keys; it needs Ctrl, Alt or Shift, and Esc cancels. If another program already uses the combination you are told and the old one stays |
-| Pause in fullscreen apps and games | Switches the blur off while a fullscreen app or game is in front, and back on afterwards (on by default). The hotkey still works |
-| Launch when Windows starts | Adds or removes a per-user startup entry |
-| Check for updates | Shows the version (also in the window title) and, only when you click, asks GitHub which release is the latest. The app never connects to the internet on its own |
+| Hide the real cursor when fast | Swaps in an invisible cursor above this speed (cm/s on your main monitor, same hand speed on every screen) |
+| Toggle hotkey | Global on/off shortcut. Needs Ctrl, Alt or Shift |
+| Pause in fullscreen | No blur while a fullscreen app or game is in front |
+| Launch when Windows starts | Per-user startup entry |
+| Check for updates | Only asks GitHub when you click. The app never goes online on its own |
 
-Settings are stored in `%APPDATA%\CursorMotionBlur\settings.ini`.
+Settings live in `%APPDATA%\CursorMotionBlur\settings.ini`.
 
-### If the cursor ever stays invisible
+**Cursor stuck invisible?** It restores your cursors on exit and on crash, and on the next start if it got killed while they were hidden. Otherwise just run the exe again, or open *Mouse > Pointers* in Windows settings and click OK.
 
-CursorMotionBlur restores your cursors on exit, on crash and on the next start. If something still goes wrong, just run `CursorMotionBlur.exe` again, or open *Mouse > Pointers* in Windows settings and click OK.
+## Known limits
 
-## Build from source
+- **No blur on top of Start, Search, notifications and other shell things.** The overlay is a normal window and Windows keeps those in a higher layer, so the blur goes underneath them. See the notice at the top.
+- **The blur lags a fram or two behind the pointer.** Windows draws the real pointer last, but any normal window shows up one or two refreshes later. At 30-45 cm/s the gap is about 1.5 pointer widths. That's why "hide when fast" exists.
 
-Needs [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (clang for Windows; `winget install MartinStorsjo.LLVM-MinGW.UCRT`) on the PATH:
+## Stats
+
+Nothing at all while the mouse is still, about 1% of the CPU while it moves, about 2-3 MB of private memory. Below the minimum blur speed it stays almost idle ([numbers](BENCHMARKS.md)).
+
+![CPU use of the old and new app at different speeds](assets/benchmark-app.png)
+
+## Build
+
+Needs [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) on PATH (`winget install MartinStorsjo.LLVM-MinGW.UCRT`):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 
-The result is `dist\CursorMotionBlur.exe`. `tools\make-icon.ps1` regenerates `assets\icon.ico`. Set the environment variable `CMB_DEBUG=1` before starting the app to get a log in `%TEMP%\CursorMotionBlur.log`.
-
-The code is plain C and Win32: `main.c` (tray, hotkey, settings file), `engine.c` (cursor path, hiding the cursor, the blur copies), `render.c` (drawing) and `ui.c` (settings window). Versions up to 1.1 were C# / .NET; in tests the C rewrite used a third to two thirds of the CPU of the last .NET version while the mouse moves (0.5-1.2% of the whole CPU instead of 1.3-2.4%) and about a quarter of the memory (1.5 MB instead of 5.5-6 MB). A Direct3D + DirectComposition renderer was tried too: it used more CPU than blending on the CPU (driver overhead per frame) and about 24 MB of memory for the graphics driver, so the CPU renderer was kept.
-
-## How it works
-
-A layered, click-through, always-on-top window shows fading copies of the current cursor picture along its recent path, blended by hand into one bitmap. The cursor position is read on every raw mouse report (the app sleeps completely while the mouse is still), and a frame is drawn for each new position, at most once per refresh of the monitor. For the "hide when fast" option the app replaces the static system cursors using `SetSystemCursor` and restores them with `SystemParametersInfo(SPI_SETCURSORS)`.
-
-## Known limit: the blur trails slightly behind the pointer
-
-Windows draws the real mouse pointer at the last possible moment, but any ordinary window (this overlay included) goes through the desktop compositor and appears one to two screen refreshes later. So the front of the blur sits a little behind the pointer, by roughly 10-17 ms of movement, and the faster you move the bigger the gap in pixels. This is why the app can hide the real pointer during very fast movement (the "hide above speed" setting).
-
-Measured from real screen recordings on a 120 Hz monitor (pointer about 25 px wide), how far the front of the blur trails behind the pointer:
-
-| Pointer speed on screen | Gap, in pointer widths |
-| --- | --- |
-| 15-30 cm/s | about 0.6-1.2 |
-| 30-45 cm/s | about 1.3-1.9 |
-| 45-60 cm/s | about 1.8-2.5 |
-| 60-90 cm/s | about 2.3-3.6 |
-| 90+ cm/s | about 3.8 |
-
-These numbers are rough (the test movements were scripted back-and-forth sweeps, so the speed was not perfectly steady). Predicting where the pointer is heading was tried and did not work well for fast curved movement, so it is not part of the app.
+You get `dist\CursorMotionBlur.exe`. Set `CMB_DEBUG=1` to get a log in `%TEMP%\CursorMotionBlur.log`. It's plain C and Win32: `main.c` (tray, hotkey, settings), `engine.c` (cursor path, hiding, blur copies), `render.c` (drawing), `ui.c` (settings window).
 
 ## License
 
-Public domain ([Unlicense](LICENSE)). Anyone can use, copy, modify or sell it, no strings attached.
-
-
+Public domain ([Unlicense](LICENSE)). Do whatever you want with it.

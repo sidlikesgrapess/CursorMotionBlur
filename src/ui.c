@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <wchar.h>
 
-enum { ID_ENABLED = 100, ID_LHOT, ID_HOTKEY, ID_LSTRENGTH, ID_STRENGTH, ID_LTRAIL, ID_TRAIL, ID_HIDE, ID_LSPEED, ID_SPEED,
+enum { ID_ENABLED = 100, ID_LHOT, ID_HOTKEY, ID_LOPACITY, ID_OPACITY, ID_LDRAW, ID_DRAW, ID_LTRAIL, ID_TRAIL, ID_HIDE, ID_LSPEED, ID_SPEED,
        ID_PAUSE, ID_STARTUP, ID_LUPDATE, ID_UPDATE, ID_RESET, ID_CLOSE };
 #define WM_UPDATE_DONE (WM_APP + 10)
 #define HOTKEY_ID      1   // as registered by main.c
@@ -38,7 +38,10 @@ static void ShowHotkey(void)
 static void ShowLabels(void)
 {
     WCHAR t[64];
-    swprintf(t, 64, L"Trail opacity: %d%%", g_set.strength);                    SetDlgItemTextW(win, ID_LSTRENGTH, t);
+    swprintf(t, 64, L"Trail opacity: %d%%", g_set.opacity);                     SetDlgItemTextW(win, ID_LOPACITY, t);
+    if (g_set.drawSpeedCm) swprintf(t, 64, L"Minimum blur speed: %d cm/s on the main screen", g_set.drawSpeedCm);
+    else wcscpy(t, L"Minimum blur speed: none, blur at any speed");
+    SetDlgItemTextW(win, ID_LDRAW, t);
     swprintf(t, 64, L"Trail length: %d ms", g_set.trailMs);                     SetDlgItemTextW(win, ID_LTRAIL, t);
     swprintf(t, 64, L"Hide above speed: %d cm/s on the main screen", g_set.hideSpeedCm); SetDlgItemTextW(win, ID_LSPEED, t);
 }
@@ -56,7 +59,8 @@ static void LoadValues(void)   // setting a checkbox or slider in code sends no 
     Check(ID_HIDE, g_set.hideWhenFast);
     Check(ID_PAUSE, g_set.pauseFullscreen);
     Check(ID_STARTUP, Startup_Get());
-    SendMessageW(Item(ID_STRENGTH), TBM_SETPOS, TRUE, g_set.strength);
+    SendMessageW(Item(ID_OPACITY), TBM_SETPOS, TRUE, g_set.opacity);
+    SendMessageW(Item(ID_DRAW), TBM_SETPOS, TRUE, g_set.drawSpeedCm);
     SendMessageW(Item(ID_TRAIL), TBM_SETPOS, TRUE, g_set.trailMs);
     SendMessageW(Item(ID_SPEED), TBM_SETPOS, TRUE, g_set.hideSpeedCm);
     EnableWindow(Item(ID_SPEED), g_set.hideWhenFast);
@@ -198,7 +202,8 @@ static SIZE Layout(int newDpi)
     Place(ID_LHOT, m, y + (btnH - lineH) / 2, W - hotW - P(4), lineH);
     Place(ID_HOTKEY, m + W - hotW, y, hotW, btnH);
     y += btnH + P(8);
-    SLIDER(ID_LSTRENGTH, ID_STRENGTH);
+    SLIDER(ID_LOPACITY, ID_OPACITY);
+    SLIDER(ID_LDRAW, ID_DRAW);
     SLIDER(ID_LTRAIL, ID_TRAIL);
     CHECKBOX(ID_HIDE);
     SLIDER(ID_LSPEED, ID_SPEED);
@@ -259,7 +264,8 @@ static LRESULT CALLBACK Proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_HSCROLL:   // a slider moved
     {
         int v = (int)SendMessageW((HWND)lp, TBM_GETPOS, 0, 0), id = GetDlgCtrlID((HWND)lp);
-        if (id == ID_STRENGTH) g_set.strength = v;
+        if (id == ID_OPACITY) g_set.opacity = v;
+        if (id == ID_DRAW) g_set.drawSpeedCm = v;
         if (id == ID_TRAIL) g_set.trailMs = v;
         if (id == ID_SPEED) g_set.hideSpeedCm = v;
         ShowLabels();
@@ -338,7 +344,8 @@ void UI_Show(void)
     Child(L"STATIC", L"Toggle hotkey", SS_LEFT, ID_LHOT);
     Child(L"BUTTON", L"", BS_PUSHBUTTON | WS_TABSTOP, ID_HOTKEY);
     SetWindowSubclass(Item(ID_HOTKEY), HotkeyProc, 1, 0);
-    Slider(ID_LSTRENGTH, ID_STRENGTH, 1, 100, 10);
+    Slider(ID_LOPACITY, ID_OPACITY, 1, 100, 10);
+    Slider(ID_LDRAW, ID_DRAW, 0, 50, 5);
     Slider(ID_LTRAIL, ID_TRAIL, 10, 150, 10);
     Child(L"BUTTON", L"Hide the real cursor when moving very fast", BS_AUTOCHECKBOX | WS_TABSTOP, ID_HIDE);
     Slider(ID_LSPEED, ID_SPEED, 20, 300, 20);
