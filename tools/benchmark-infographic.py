@@ -38,7 +38,7 @@ def panel(rect, title, a10, a11, ymax):
     n = len(speeds); w = 0.38
     xs = range(n)
     ax.axvspan(0.5, 3.5, color='#2a2a27', zorder=0)
-    ax.text(2.0, ymax * 0.965, 'below "Draw above speed" (10 cm/s):\nno blur drawn in 1.1', ha='center', va='top',
+    ax.text(2.0, ymax * 0.965, 'below "Minimum blur speed" (10 cm/s):\nno blur drawn in 1.1', ha='center', va='top',
             fontsize=10.5, color=MUTED)
     ax.bar([x - w / 2 - 0.01 for x in xs], a10, w, color=OLD, zorder=2)
     ax.bar([x + w / 2 + 0.01 for x in xs], a11, w, color=NEW, zorder=2)
@@ -61,7 +61,7 @@ fig.legend(handles=[Patch(color=OLD, label='1.0'), Patch(color=NEW, label='1.1')
            bbox_to_anchor=(0.965, 0.655), ncol=2, frameon=False, fontsize=12.5, handlelength=1.4)
 
 fig.text(0.04, 0.065, 'Measured on a 2880×1800 laptop screen at 200% scaling and 120 Hz, about 125 mouse reports per second, '
-         'opacity 92, trail 30 ms, hiding on; 1.1 with "Draw above speed" at 10 cm/s.', fontsize=10.5, color=MUTED)
+         'opacity 92, trail 30 ms, hiding on; 1.1 with "Minimum blur speed" at 10 cm/s.', fontsize=10.5, color=MUTED)
 fig.text(0.04, 0.035, 'Full data: github.com/sidlikesgrapess/CursorMotionBlur/blob/main/windhawk/BENCHMARKS.md',
          fontsize=10.5, color=MUTED)
 fig.savefig(r'C:\Users\Siddartha\CursorMotionBlur\assets\benchmark-1.1.png', facecolor=SURF)

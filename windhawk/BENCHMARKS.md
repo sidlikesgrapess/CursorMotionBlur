@@ -71,7 +71,7 @@ Two runs, CPU as % of all 12 logical CPUs; "private" is the mod process's commit
 ## 1.1 vs 1.0 (2026-10-14, 120 Hz)
 
 Each version installed in Windhawk in turn, same settings (opacity 92, trail 30 ms, hiding on); 1.1 with
-"Draw above speed" at 10 cm/s (about 960 px/s on this screen). Circles of 400 px radius, about 125 mouse reports
+"Minimum blur speed" at 10 cm/s (about 960 px/s on this screen). Circles of 400 px radius, about 125 mouse reports
 per second, 6 s per speed. CPU as % of all 12 logical CPUs; "blur on" is how often the blur window was showing.
 
 | Speed | Mod 1.0 | Mod 1.1 | Blur on 1.0 | Blur on 1.1 | explorer 1.0 | explorer 1.1 | dwm 1.0 | dwm 1.1 | Private RAM 1.0 | Private RAM 1.1 |
