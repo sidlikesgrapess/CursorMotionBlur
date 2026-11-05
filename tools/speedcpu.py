@@ -33,6 +33,9 @@ if 'cm' in opts: speeds = [('still', 0)] + [('%s cm/s' % c, float(c) * PX_PER_CM
 results = []
 for label, pxs in speeds:
     to(1440 + R, 900); time.sleep(1)   # where the circle starts, so there is no jump that would turn the blur on
+    # Without admin rights dwm.exe can't be opened: read its CPU from the performance counter instead (% of one core, per second).
+    counter = None if hs['dwm'] else subprocess.Popen(['typeperf', r'\Process(dwm)\% Processor Time', '-si', '1', '-sc', '6'],
+                                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     m0, d0, e0, t0 = cpu(hs['mod']), cpu(hs['dwm']), cpu(hs['exp']), time.perf_counter()
     while time.perf_counter() - t0 < 6:
         if pxs:
@@ -40,6 +43,12 @@ for label, pxs in speeds:
         time.sleep(0.008)
     dt = time.perf_counter() - t0
     m, d, e = (cpu(hs['mod']) - m0) / dt * 100, (cpu(hs['dwm']) - d0) / dt * 100, (cpu(hs['exp']) - e0) / dt * 100
+    if counter:
+        vals = []
+        for line in counter.communicate(timeout=10)[0].splitlines():
+            try: vals.append(float(line.split(',')[-1].strip('" ')))
+            except ValueError: pass   # the header and blank lines
+        d = sum(vals) / len(vals) if vals else 0
     ws, pv = mem(hs['mod'])
     print('%-20s %9.2f%% %11.1f%% %11.2f%% %9.2f%%   %4.1f ws / %4.1f private' % (label, m / N, m, e / N, d / N, ws, pv))
     results.append(dict(speed=label, mod=m / N, explorer=e / N, dwm=d / N, ws=ws, private=pv))

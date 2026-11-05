@@ -1,5 +1,34 @@
 # CursorMotionBlur: CPU and RAM
 
+## 2.1.0 vs 2.0.0
+
+Measured 2026-11-05, both versions one after the other with the same settings as below (opacity 92, trail 30 ms, hiding
+on; 2.1.0 with "Minimum blur speed" at 10 cm/s). Same laptop and method; dwm.exe was read from its performance counter
+(`\Process(dwm)\% Processor Time`), as the script ran without administrator rights.
+
+| Speed | App 2.0.0 | App 2.1.0 | dwm 2.0.0 | dwm 2.1.0 | Private RAM 2.0.0 | Private RAM 2.1.0 |
+|---|---|---|---|---|---|---|
+| Still | 0.00% | 0.00% | 0.69% | 0.60% | 2.1 MB | 2.1 MB |
+| 2 cm/s | 0.59% | 0.13% | 1.86% | 0.96% | 2.2 MB | 2.1 MB |
+| 4 cm/s | 0.41% | 0.13% | 1.99% | 1.07% | 2.2 MB | 2.1 MB |
+| 8 cm/s | 0.52% | 0.09% | 2.15% | 0.81% | 2.1 MB | 2.0 MB |
+| 12 cm/s | 0.72% | 0.50% | 2.06% | 1.50% | 2.1 MB | 8.0 MB |
+| 40 cm/s | 1.06% | 1.28% | 2.03% | 1.84% | 2.3 MB | 8.0 MB |
+| 80 cm/s | 0.89% | 1.00% | 2.40% | 2.12% | 2.6 MB | 8.0 MB |
+
+The working set was 12-13 MB for 2.0.0 and 12 MB for 2.1.0 (23 MB while the blur is drawn).
+
+- Below the minimum blur speed 2.1.0 draws nothing: about 78% less CPU for the app, and dwm about halves.
+- Above it the app costs about the same; a second run of 2.1.0 read 0.67%, 1.06% and 1.21% at 12, 40 and 80 cm/s, so a
+  few tenths either way is noise. dwm is a little lower, as only the changed part of the window is sent each frame.
+- 2.1.0 holds about 8 MB while the blur is drawn: its window stays put while the pointer is still (so apps under it,
+  such as Office menus, don't flicker), and is larger than the blur. It gives the memory back 1.5 s after the mouse
+  stops; the "Still" row and the tests in `tools/modtest` show it back at 2 MB.
+
+![App 2.1.0 vs 2.0.0](assets/benchmark-app-2.1.png)
+
+## Before 2.1.0 vs 2.0.0
+
 Measured 2026-10-14. The app as it was in v2.0.0 against the current build, one after the other, with the same settings
 (opacity 92, trail 30 ms, hiding on); the new one with "Minimum blur speed" at 10 cm/s (about 960 px/s on this screen).
 

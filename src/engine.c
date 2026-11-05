@@ -134,6 +134,7 @@ static DWORD WINAPI SampleLoop(void *unused)
     RECT monRect = { 0 };       // the monitor the cursor is on
     HWND lastFront = NULL;
     int pointerSize = 0;        // the pointer size set in Windows, at 100% scaling (0: not read yet)
+    POINT lastPt = { LONG_MIN, LONG_MIN };   // where the cursor was at the last look
     UINT mainDpi = 96;
     double mainPxPerCm = 0;     // pixel density of the main monitor (0: not measured yet)
     double hidePxPerCm = 38;    // turns the hide speed (cm/s on the main monitor) into px/s on the monitor in use
@@ -182,7 +183,19 @@ static DWORD WINAPI SampleLoop(void *unused)
         // Crossing to another monitor (or display or cursor settings changed): measure it here, outside the lock, as some of
         // these calls are slow.
         BOOL stale = showing && InterlockedExchange(&monStale, 0);
-        BOOL newMon = showing && (stale || !PtInRect(&monRect, ci.ptScreenPos));
+        // Windows tells no one when the pointer size changes: look at it again when the mouse moves after a pause.
+        BOOL resized = FALSE;
+        if (showing && (ci.ptScreenPos.x != lastPt.x || ci.ptScreenPos.y != lastPt.y))
+        {
+            if (pointerSize && Now() - lastMove >= 1000)
+            {
+                int size = PointerSize();
+                resized = size != pointerSize;
+                pointerSize = size;
+            }
+            lastPt = ci.ptScreenPos;
+        }
+        BOOL newMon = showing && (stale || resized || !PtInRect(&monRect, ci.ptScreenPos));
         int newCursor = 32;
         if (newMon)
         {
@@ -192,7 +205,9 @@ static DWORD WINAPI SampleLoop(void *unused)
             UINT dpi = 96, dy;
             GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &dpi, &dy);
             if (stale || !pointerSize) pointerSize = PointerSize();
-            newCursor = MulDiv(pointerSize, dpi, 96);
+            // Windows scales the pointer in steps, not with the monitor's scaling: x1 up to 125%, x1.5 up to 175%... (SM_CXCURSOR
+            // is 32 px at size 1, rounded down to 16 px steps).
+            newCursor = MulDiv(pointerSize, GetSystemMetricsForDpi(SM_CXCURSOR, dpi), 32);
             int hz = RefreshRate(mon);
             // The hide speed is set in cm/s as measured on the main monitor. Windows moves the pointer further on a monitor with
             // more scaling (twice the pixels at 200%), so scale it by the DPI to hide at the same hand speed on every monitor.
@@ -220,7 +235,18 @@ static DWORD WINAPI SampleLoop(void *unused)
             if (!blankActive) curHandle = ci.hCursor;   // keep the real cursor's picture while it is hidden
             BOOL changed = histN == 0 || hist[histN - 1].x != ci.ptScreenPos.x || hist[histN - 1].y != ci.ptScreenPos.y;
 
+            // The pointer jumped across a large part of the desktop in one step: not a hand movement (PowerToys Cursor Wrap sends it
+            // from one edge to the other, an app can call SetCursorPos). No hand covers 40% of the desktop between two mouse reports.
+            BOOL jumped = FALSE;
+            if (changed && histN)
+            {
+                int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN), vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                int dx = abs(ci.ptScreenPos.x - hist[histN - 1].x), dy = abs(ci.ptScreenPos.y - hist[histN - 1].y);
+                jumped = dx * 5 > vw * 2 || dy * 5 > vh * 2;
+            }
+
             if (newMon) { histN = 0; monCursor = newCursor; }   // drop the trail so it doesn't smear across the gap between monitors
+            else if (jumped) histN = 0;                         // likewise across a jump
 
             LONGLONG now = Now();
             if (changed && histN && hist[histN - 1].t == now)   // several reports within a ms (fast mice): keep the newest
@@ -607,7 +633,7 @@ static BOOL Render(void)
         }
     }
     if (!n) return Hide();
-    drawFailed = !R_Draw(sp, sw, sh, copies, n, minX, minY, maxX - minX, maxY - minY);
+    drawFailed = !R_Draw(sp, sw, sh, copies, n, minX, minY, maxX - minX, maxY - minY, (POINT){ last.x, last.y });
     if (drawFailed) return Hide();
     shown = TRUE;
     return TRUE;

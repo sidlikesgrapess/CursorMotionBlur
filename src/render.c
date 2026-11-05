@@ -14,6 +14,12 @@ static UINT32 *pic;             // the cursor picture at the drawn size
 static int *span;               // per row of pic: first and one-past-last visible pixel (most of a cursor is transparent)
 static int picId, picW, picH;
 static BOOL visible;            // the overlay window is shown
+// Where the window sits (screen coordinates; placed: it is there and holds the canvas) and the part of it the last frame drew
+// on (window and canvas coordinates). Windows tells the window under a still pointer about every move or resize of a window
+// above it, as if the mouse had moved, and an app like Office then redraws its hovered menu item over and over. So the window
+// is larger than the blur and stays put while the pointer is still.
+static BOOL placed;
+static RECT win, inked;
 
 static void CreateOverlay(void)
 {
@@ -31,6 +37,7 @@ static void ReleaseCanvas(void)
 {
     if (dib) { SelectObject(memDc, dibOld); DeleteObject(dib); dib = NULL; }
     canvasW = canvasH = 0;
+    SetRectEmpty(&inked);
 }
 
 static void EnsureCanvas(int w, int h)   // grows only, in 128 px steps
@@ -118,25 +125,72 @@ static void Blend(int a, int ox, int oy)
     }
 }
 
-BOOL R_Draw(const Sprite *sp, int sw, int sh, const Copy *c, int n, int x, int y, int w, int h)
+// Gives the window the canvas: all of it, or only the dirty part. Position and size are passed even when they stay the same, as
+// Windows ignores the dirty rectangle without them.
+static BOOL Update(const RECT *dirty)
+{
+    POINT dst = { win.left, win.top }, src = { 0, 0 };
+    SIZE size = { win.right - win.left, win.bottom - win.top };
+    BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
+    UPDATELAYEREDWINDOWINFO u = { sizeof u, NULL, &dst, &size, memDc, &src, 0, &bf, ULW_ALPHA, dirty };
+    return UpdateLayeredWindowIndirect(wnd, &u);
+}
+
+static void Wipe(void)   // clears the last frame from the canvas
+{
+    for (int r = inked.top; r < inked.bottom; r++) memset(bits + r * canvasW + inked.left, 0, (inked.right - inked.left) * 4);
+    SetRectEmpty(&inked);
+}
+
+// Makes the hidden window 1 x 1, which gives back the memory of its picture.
+static void Shrink(void)
+{
+    if (!placed || !dib || visible) return;
+    Wipe();
+    win.right = win.left + 1;
+    win.bottom = win.top + 1;
+    if (!Update(NULL)) placed = FALSE;
+}
+
+BOOL R_Draw(const Sprite *sp, int sw, int sh, const Copy *c, int n, int x, int y, int w, int h, POINT at)
 {
     if (!wnd) CreateOverlay();
     if (!wnd || !memDc) return FALSE;
     if (!Resize(sp, sw, sh)) return FALSE;
-    EnsureCanvas(w, h);
-    if (!dib) return FALSE;
-    for (int r = 0; r < h; r++) memset(bits + r * canvasW, 0, w * 4);
+    RECT box = { x, y, x + w, y + h };
+    // Moved only when the blur doesn't fit in it any more, so never while the pointer is still: the trail then only shrinks
+    // toward the pointer.
+    BOOL place = !dib || !placed || box.left < win.left || box.top < win.top || box.right > win.right || box.bottom > win.bottom;
+    RECT old = inked;
+    if (place)   // half the monitor's width and height around the pointer, within the monitor
+    {
+        MONITORINFO mi = { sizeof mi };
+        if (!GetMonitorInfoW(MonitorFromPoint(at, MONITOR_DEFAULTTONEAREST), &mi)) return FALSE;
+        RECT mon = mi.rcMonitor, next;
+        int hw = (mon.right - mon.left) / 4, hh = (mon.bottom - mon.top) / 4, margin = sw > sh ? sw : sh;
+        SetRect(&next, at.x - hw, at.y - hh, at.x + hw, at.y + hh);
+        InflateRect(&mon, margin, margin);   // the cursor reaches past the edge of the monitor
+        IntersectRect(&next, &next, &mon);
+        UnionRect(&next, &next, &box);
+        // Moved at the same size, the window can show up at its new place a frame before its new picture, and the blur jumps
+        // ahead; with a new size Windows takes both at once.
+        if (placed && next.right - next.left == win.right - win.left && next.bottom - next.top == win.bottom - win.top) next.right++;
+        EnsureCanvas(next.right - next.left, next.bottom - next.top);
+        if (!dib) return FALSE;
+        win = next;
+    }
+    Wipe();
+    int ox = x - win.left, oy = y - win.top;
     for (int i = 0; i < n; i++)
     {
         int a = (int)(c[i].a * 255 + 0.5f);
-        if (a > 0 && c[i].x >= 0 && c[i].y >= 0 && c[i].x + sw <= w && c[i].y + sh <= h) Blend(a, c[i].x, c[i].y);
+        if (a > 0 && c[i].x >= 0 && c[i].y >= 0 && c[i].x + sw <= w && c[i].y + sh <= h) Blend(a, c[i].x + ox, c[i].y + oy);
     }
-    // The window is resized to the frame every time. Keeping it at the canvas size and only moving it is a little cheaper, but
-    // Windows can then show the move a frame before the new picture, and the blur jitters.
-    POINT dst = { x, y }, src = { 0, 0 };
-    SIZE size = { w, h };
-    BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
-    if (!UpdateLayeredWindow(wnd, NULL, &dst, &size, memDc, &src, 0, &bf, ULW_ALPHA)) return FALSE;
+    RECT dirty;
+    SetRect(&inked, ox, oy, ox + w, oy + h);
+    UnionRect(&dirty, &old, &inked);
+    if (!Update(place ? NULL : &dirty)) { placed = FALSE; return FALSE; }
+    placed = TRUE;
     if (!visible)
     {
         SetWindowPos(wnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -149,6 +203,7 @@ void R_Hide(void) { if (wnd) ShowWindow(wnd, SW_HIDE); visible = FALSE; }
 
 void R_Trim(void)
 {
+    Shrink();
     ReleaseCanvas();
     free(pic); pic = NULL;
 }
