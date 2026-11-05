@@ -17,7 +17,7 @@ extern "C" {
 #endif
 
 #define APP_NAME    L"CursorMotionBlur"
-#define APP_VERSION L"2.0.0"
+#define APP_VERSION L"2.1.0"
 #define APP_TITLE   APP_NAME L" v" APP_VERSION
 #define REPO        L"sidlikesgrapess/CursorMotionBlur"
 
@@ -64,10 +64,10 @@ typedef struct { int x, y; float a; } Copy;                     // one copy: top
 #define MAX_COPIES 100      // the most copies spread along the trail in one frame
 #define COPY_BUF   612      // room for the copies of one frame: MAX_COPIES, plus one for each of the 511 segments of a full path
 
-// Draws n copies of sp, each resized to sw x sh, into the box (x, y, w, h) in screen pixels, and shows it.
-BOOL R_Draw(const Sprite *sp, int sw, int sh, const Copy *c, int n, int x, int y, int w, int h);   // FALSE: could not draw
+// Draws n copies of sp, each resized to sw x sh, into the box (x, y, w, h) in screen pixels, and shows it; at: the pointer.
+BOOL R_Draw(const Sprite *sp, int sw, int sh, const Copy *c, int n, int x, int y, int w, int h, POINT at);   // FALSE: could not draw
 void R_Hide(void);
-void R_Trim(void);          // idle for a while: give back memory that can be rebuilt
+void R_Trim(void);          // idle for a while (overlay hidden): give back memory that can be rebuilt
 
 // ---- settings window (ui.c) ----
 void UI_Show(void);

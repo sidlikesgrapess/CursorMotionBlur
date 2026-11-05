@@ -39,9 +39,9 @@ Settings live in `%APPDATA%\CursorMotionBlur\settings.ini`.
 
 ## Stats
 
-Nothing at all while the mouse is still, about 1% of the CPU while it moves, about 2-3 MB of private memory. Below the minimum blur speed it stays almost idle ([numbers](BENCHMARKS.md)).
+Nothing at all while the mouse is still, about 1% of the CPU while it moves, about 2 MB of private memory, and 7-8 MB for short bursts while the blur is drawn. Below the minimum blur speed it stays almost idle ([numbers](BENCHMARKS.md)).
 
-![CPU use of the old and new app at different speeds](assets/benchmark-app.png)
+![CPU and memory of 2.1.0 and 2.0.0 at different speeds](assets/benchmark-app-2.1.png)
 
 ## Build
 
