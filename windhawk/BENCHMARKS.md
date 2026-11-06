@@ -1,5 +1,35 @@
 # Pointer Afterimage Motion Blur — CPU benchmarks
 
+## 1.2 vs 1.1 (2026-11-06, 120 Hz)
+
+Each version running in Windhawk in turn, default settings (opacity 50, minimum blur speed 29 cm/s, trail 25 ms,
+hiding on above 30 cm/s). Same laptop and method as below: circles of 400 px radius, about 125 mouse reports per
+second, 6 s per speed. CPU as % of all 12 logical CPUs; dwm.exe read from its performance counter
+(`\Process(dwm)\% Processor Time`), as the script ran without administrator rights. One run per version.
+
+| Speed | Mod 1.1 | Mod 1.2 | explorer 1.1 | explorer 1.2 | dwm 1.1 | dwm 1.2 | Private RAM 1.1 | Private RAM 1.2 |
+|---|---|---|---|---|---|---|---|---|
+| Still | 0.00% | 0.00% | 0.61% | 0.69% | 1.37% | 1.37% | 2.1 MB | 2.0 MB |
+| 5 cm/s | 0.17% | 0.20% | 0.54% | 0.61% | 1.52% | 1.35% | 2.1 MB | 2.0 MB |
+| 15 cm/s | 0.20% | 0.22% | 0.54% | 0.67% | 1.52% | 1.50% | 2.1 MB | 2.0 MB |
+| 25 cm/s | 1.61% | 1.43% | 0.67% | 0.74% | 2.64% | 2.01% | 2.4 MB | 8.0 MB |
+| 40 cm/s | 1.08% | 0.76% | 0.72% | 0.65% | 2.31% | 1.77% | 2.4 MB | 8.0 MB |
+| 60 cm/s | 1.04% | 1.00% | 0.74% | 0.74% | 2.61% | 1.94% | 2.4 MB | 8.0 MB |
+| 80 cm/s | 1.24% | 1.11% | 0.59% | 0.61% | 2.76% | 2.05% | 2.7 MB | 8.0 MB |
+
+The working set was 11 MB for both while still, and 11-12 MB (1.1) and 21 MB (1.2) while the blur was drawn.
+
+- The blur was on from 25 cm/s in both versions; below that, both only listen to the mouse.
+- The mod's CPU is about the same or a little lower; a few tenths either way is run-to-run noise. dwm.exe is lower
+  while the blur is drawn, as 1.2 sends only the changed part of its window each frame.
+- 1.2 holds about 8 MB while the blur is drawn: its window stays put while the pointer is still (so apps under it,
+  such as Office menus, don't flicker), and is larger than the blur. It gives the memory back 1.5 s after the mouse
+  stops. explorer.exe, which owns the window, stays the same.
+
+![1.2 vs 1.1](../assets/benchmark-1.2.png)
+
+## 1.1, single version (2026-10-14)
+
 Measured 2026-10-14 on the mod running in Windhawk (1.1 plus the shell-hook change), with default
 settings and "Hide the real cursor when moving very fast" on.
 
